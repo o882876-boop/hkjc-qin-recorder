@@ -5,6 +5,10 @@ on:
     - cron: '7,27,47 3-13 * * *'
   workflow_dispatch:
     inputs:
+      source_test:
+        description: Check HKJC historical Quinella source
+        type: boolean
+        default: false
       write_test:
         description: Verify private archive writes without race data
         type: boolean
@@ -25,6 +29,7 @@ jobs:
           persist-credentials: false
       - run: python3 -u recorder.py
         env:
+          QIN_SOURCE_TEST: ${{ inputs.source_test }}
           QIN_WRITE_TEST: ${{ inputs.write_test }}
           PRIVATE_DATA_REPO: ${{ vars.PRIVATE_DATA_REPO }}
           PRIVATE_DATA_TOKEN: ${{ secrets.PRIVATE_DATA_TOKEN }}
