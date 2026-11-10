@@ -16,11 +16,14 @@ standard Ubuntu runner in a public repository.
 3. Confirm scheduled workflows are enabled. Scheduled wake-ups run every 10
    minutes, 11:02–23:52 Hong Kong time; a run starts recording from 50 minutes
    before the first race. To start by hand, use **Actions → Record HKJC
-   Quinella → Run workflow** with both boxes unticked.
+   Quinella → Run workflow** with all boxes unticked.
 
 Manual checks: `source_test` checks the live HKJC source. HKJC serves only
 the current or next meeting, never history. `write_test` writes and lists a
-file in `qin-diagnostics/`.
+file in `qin-diagnostics/`. `rehearsal` runs the real capture loop for 2.5 minutes on the
+next live race with the clock shifted to just before its T-5, saves the record
+to `qin-diagnostics/rehearsal-RUN.json`, reads it back, and logs how many
+seconds after each target the T-5 and T-3 boards were taken.
 
 ## Snapshots (race N)
 
@@ -31,8 +34,9 @@ file in `qin-diagnostics/`.
 | `t5`, `t3` | 5 / 3 min before race N's post time; re-taken if HKJC moves the post time |
 | `after_start` | first closed board at race N's off. If HKJC withdraws the board, `basis` starts with `FALLBACK_` and the last open board (at most 60 s old) is used |
 
-Race 1 has no rollover points. A snapshot can be taken up to 35 s after its
-target. Every missing snapshot has a reason in `missing`, such as
+Race 1 has no rollover points. The recorder wakes at each target time and
+normally takes the snapshot about 1 s after it; if a poll fails it keeps
+trying every 2 s until 35 s after the target. Every missing snapshot has a reason in `missing`, such as
 `collides_with_t5`, `recorder_not_running_at_target` or `first_race`.
 `events` holds the observed stop-sell, off, result and payout times, and each
 snapshot keeps HKJC's `source_odds_at`. A selling pause more than 2 minutes

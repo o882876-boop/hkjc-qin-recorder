@@ -15,11 +15,15 @@ on:
         description: Verify private archive writes without race data
         type: boolean
         default: false
+      rehearsal:
+        description: 2.5-min end-to-end rehearsal (live HKJC board at a shifted T-5/T-3, saved to qin-diagnostics)
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
   # Manual tests never displace or wait behind the live recorder.
-  group: ${{ (inputs.source_test || inputs.write_test) && 'hkjc-qin-test' || 'hkjc-qin-live' }}
+  group: ${{ (inputs.source_test || inputs.write_test || inputs.rehearsal) && 'hkjc-qin-test' || 'hkjc-qin-live' }}
   cancel-in-progress: false
 jobs:
   record:
@@ -35,6 +39,7 @@ jobs:
         env:
           QIN_SOURCE_TEST: ${{ inputs.source_test }}
           QIN_WRITE_TEST: ${{ inputs.write_test }}
+          QIN_REHEARSAL: ${{ inputs.rehearsal }}
           # Prefer the secret so the private repository name is masked in public logs.
           PRIVATE_DATA_REPO: ${{ secrets.PRIVATE_DATA_REPO || vars.PRIVATE_DATA_REPO }}
           PRIVATE_DATA_TOKEN: ${{ secrets.PRIVATE_DATA_TOKEN }}

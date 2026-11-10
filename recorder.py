@@ -44,8 +44,11 @@ HARD_HANDOFF = timedelta(minutes=342)       # job timeout is 358 min
 TIME_KEYS = ("post", "close", "start", "paid", "finish", "first_seen", "last_open_at")
 
 
+CLOCK_OFFSET = timedelta(0)                 # only non-zero in rehearsal mode
+
+
 def now():
-    return datetime.now(HK)
+    return datetime.now(HK) + CLOCK_OFFSET
 
 
 def log(message):
@@ -485,6 +488,29 @@ def quiet_moment(recorder, at):
     return True
 
 
+def next_due(recorder, at):
+    """Seconds until the next known snapshot target or post time (None if none soon)."""
+    due = []
+    for s in recorder.state.values():
+        if "published" in s or s.get("late") or s.get("void"):
+            continue
+        for name, target in (s.get("targets") or {}).items():
+            if target and name not in s["points"] and target > at:
+                due.append(target)
+        if s.get("post") and s["post"] > at:
+            due.append(s["post"])
+    return min((d - at).total_seconds() for d in due) if due else None
+
+
+def pause(recorder, spent):
+    """Sleep until the next poll: normally every POLL seconds, but wake right at a target."""
+    wait = max(0.5, POLL - spent)
+    due = next_due(recorder, now())
+    if due is not None and due + 0.3 < wait:
+        wait = max(0.2, due + 0.3)
+    time.sleep(wait)
+
+
 def main():
     started = now()
     day = started.date().isoformat()
@@ -541,7 +567,10 @@ def main():
             failures += 1
             if failures == 1 or failures % 8 == 0:
                 log(f"HKJC poll failed x{failures} ({type(error).__name__}: {str(error)[:80]})")
-            time.sleep(POLL)
+            due = next_due(recorder, now())
+            time.sleep(2 if due is not None and due < 60 or any(
+                s.get("targets") and any(t and now() - WINDOW < t <= now() for t in s["targets"].values())
+                for s in recorder.state.values() if "published" not in s) else POLL)
             if now() - started > HARD_HANDOFF:
                 break
             continue
@@ -578,7 +607,7 @@ def main():
                         s["published"] = archive.run
                         log(f"Race {n} archived incomplete; missing {record['missing']}")
             raise SystemExit("Meeting window ended before every race completed.")
-        time.sleep(max(1, POLL - (time.monotonic() - tick)))
+        pause(recorder, time.monotonic() - tick)
     state = {"saved_at": now().isoformat(), "meeting_id": meeting_id, "state": recorder.dump()}
     for _ in range(5):
         if archive.put(f"qin-handoff/{day}_{venue}/state-{archive.run}.json", state, "Recorder hand-over state"):
@@ -586,6 +615,61 @@ def main():
             return
         time.sleep(5)
     raise SystemExit("Could not save hand-over state.")
+
+
+def rehearsal():
+    """End-to-end test on the live HKJC meeting: shift the clock to 20 s before the next race's
+    T-5, run the real capture loop for ~2.5 min (T-5 and T-3), save the record to the private
+    archive and read it back. Times in the saved record are on the shifted clock."""
+    global CLOCK_OFFSET
+    archive = Archive()
+    meetings = hkjc(GATE, {"date": None, "venueCode": None})["raceMeetings"] or []
+    if len(meetings) != 1:
+        raise SystemExit("HKJC calendar did not return exactly one meeting.")
+    meeting = meetings[0]
+    upcoming = [r for r in sorted(meeting["races"], key=lambda r: int(r["no"]))
+                if (stamp(r.get("postTime")) or now()) > now() + timedelta(minutes=8)]
+    if not upcoming:
+        raise SystemExit("No upcoming race to rehearse on.")
+    n, post = int(upcoming[0]["no"]), stamp(upcoming[0]["postTime"])
+    CLOCK_OFFSET = (post - timedelta(minutes=5, seconds=20)) - datetime.now(HK)
+    log(f"Rehearsal on {meeting['id']} R{n}; clock shifted by {CLOCK_OFFSET.total_seconds():.0f} s")
+    recorder, end = Recorder(), now() + timedelta(minutes=2, seconds=35)
+    while now() < end:
+        tick = time.monotonic()
+        try:
+            calendar_now = hkjc(GATE, {"date": None, "venueCode": None})["raceMeetings"]
+            pools = hkjc(QUERY, {"date": meeting["date"], "venueCode": meeting["venueCode"], "raceNo": None,
+                                 "oddsTypes": ["QIN", "WIN"]})["raceMeetings"]
+            for message in recorder.observe(calendar_now[0], pools[0]["pmPools"], now()):
+                if message.startswith(f"R{n} ") and "captured" in message:
+                    log(message)
+        except (OSError, ValueError, KeyError, TypeError, AttributeError, IndexError) as error:
+            log(f"HKJC poll failed ({type(error).__name__})")
+            time.sleep(2)
+            continue
+        recorder.state = {k: v for k, v in recorder.state.items() if k == n}
+        pause(recorder, time.monotonic() - tick)
+    record = recorder.record(n, meeting["date"], meeting["venueCode"], meeting["id"])
+    record["rehearsal"] = {"clock_offset_seconds": round(CLOCK_OFFSET.total_seconds(), 3),
+                           "note": "times are shifted; real time = time - clock_offset_seconds"}
+    path = f"qin-diagnostics/rehearsal-{archive.run}.json"
+    if not archive.put(path, record, "Rehearsal record"):
+        raise SystemExit("Rehearsal record could not be saved.")
+    stored = archive.read(path)
+    problems = []
+    for name in ("t5", "t3"):
+        point = stored["points"].get(name)
+        if not point:
+            problems.append(f"{name} missing ({stored['missing'].get(name)})")
+            continue
+        late = (stamp(point["observed_at"]) - stamp(point["target_at"])).total_seconds()
+        log(f"{name}: target {point['target_at'][11:19]} observed {point['observed_at'][11:23]} "
+            f"(+{late:.1f} s), {len(point['odds'])} combinations, HKJC odds time {point['source_odds_at']}")
+    log(f"Saved and read back from the private archive: {path}")
+    if problems:
+        raise SystemExit("Rehearsal failed: " + "; ".join(problems))
+    print("Rehearsal passed.")
 
 
 def source_check():
@@ -618,6 +702,8 @@ def source_check():
 if __name__ == "__main__":
     if os.environ.get("QIN_SOURCE_TEST") == "true":
         source_check()
+    elif os.environ.get("QIN_REHEARSAL") == "true":
+        rehearsal()
     elif os.environ.get("QIN_WRITE_TEST") == "true":
         try:
             archive = Archive()

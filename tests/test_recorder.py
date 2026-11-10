@@ -260,6 +260,13 @@ class MainLoop(unittest.TestCase):
         for path in self.races():
             if not path.endswith("race-01-100-1.json"):
                 self.assertEqual(json.loads(FakeArchive.files[path])["missing"], {}, path)
+        for path in self.races():
+            record = json.loads(FakeArchive.files[path])
+            for name in ("t5", "t3", "after_rollover"):
+                point = record["points"][name]
+                if point:
+                    late = datetime.fromisoformat(point["observed_at"]) - datetime.fromisoformat(point["target_at"])
+                    self.assertTrue(timedelta(0) <= late <= timedelta(seconds=2), f"{path} {name} {late}")
 
     def test_long_meeting_hands_over_and_next_run_completes_all_five_points(self):
         races = card(9)
