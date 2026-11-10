@@ -1,12 +1,14 @@
 name: Record HKJC Quinella
 on:
   schedule:
-    # UTC, Hong Kong 11:07–21:47. HKJC's meeting calendar gates the long job.
-    - cron: '7,27,47 3-13 * * *'
+    # UTC, every 10 minutes from Hong Kong 11:02 to 23:52. HKJC's meeting calendar gates the long job.
+    # During a meeting one run records and the next scheduled run waits in the queue: it takes over
+    # if the first run stops (hand-over near the 6-hour job limit, crash or cancellation).
+    - cron: '2-59/10 3-15 * * *'
   workflow_dispatch:
     inputs:
       source_test:
-        description: Check HKJC historical Quinella source
+        description: Check the live HKJC Quinella source (current/next meeting only)
         type: boolean
         default: false
       write_test:
@@ -16,13 +18,15 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: hkjc-qin-live
+  # Manual tests never displace or wait behind the live recorder.
+  group: ${{ (inputs.source_test || inputs.write_test) && 'hkjc-qin-test' || 'hkjc-qin-live' }}
   cancel-in-progress: false
 jobs:
   record:
-    if: github.event.repository.private == false && github.ref_name == github.event.repository.default_branch
+    # Do not rely on github.event.repository: scheduled events may not carry it.
+    if: github.repository == 'o882876-boop/hkjc-qin-recorder' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 355
+    timeout-minutes: 358
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -31,5 +35,6 @@ jobs:
         env:
           QIN_SOURCE_TEST: ${{ inputs.source_test }}
           QIN_WRITE_TEST: ${{ inputs.write_test }}
-          PRIVATE_DATA_REPO: ${{ vars.PRIVATE_DATA_REPO }}
+          # Prefer the secret so the private repository name is masked in public logs.
+          PRIVATE_DATA_REPO: ${{ secrets.PRIVATE_DATA_REPO || vars.PRIVATE_DATA_REPO }}
           PRIVATE_DATA_TOKEN: ${{ secrets.PRIVATE_DATA_TOKEN }}
