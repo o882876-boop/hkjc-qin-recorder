@@ -14,13 +14,8 @@ from zoneinfo import ZoneInfo
 
 HK = ZoneInfo("Asia/Hong_Kong")
 ENDPOINT = "https://info.cld.hkjc.com/graphql/base-get/"
-QUERY = """query($date:String,$venue:String,$types:[OddsType]){
- raceMeetings(date:$date,venueCode:$venue){id date venueCode
- races{no postTime status wageringFieldSize}
- pmPools(oddsTypes:$types){id oddsType status sellStatus oddsLastUpdateTime lastUpdateTime
- leg{races} oddsNodes{combString oddsValue}}}}"""
-GATE = """query($date:String){
- raceMeetings(date:$date){id date venueCode races{no postTime status}}}"""
+QUERY = "\n      query sp4e_racing_pmPool($date: String, $venueCode: String, $oddsTypes: [OddsType], $raceNo: Int) {\n          raceMeetings(date: $date, venueCode: $venueCode)\n          {\n            pmPools(oddsTypes: $oddsTypes, raceNo: $raceNo) {\n              id\n              status\n              sellStatus\n              oddsType\n              lastUpdateTime\n              oddsLastUpdateTime\n              guarantee\n              minTicketCost\n              name_en\n              name_ch\n              leg {\n                number\n                races\n              }\n              cWinSelections {\n                composite\n                name_ch\n                name_en\n                starters\n              }\n              oddsNodes {\n                combString\n                oddsValue\n                hotFavourite\n                oddsDropValue\n                bankerOdds {\n                  combString\n                  oddsValue\n                }\n              }\n            }\n          }\n      }\n\n"
+GATE = "\n        \n        \n        query raceMeetings($date: String, $venueCode: String) {\n            timeOffset {\n              rc\n            }\n            activeMeetings : raceMeetings\n            {\n              id\n              venueCode\n              date\n              status\n              races {\n                no\n                postTime\n                status\n                wageringFieldSize\n              }\n              poolInvs: pmPools(oddsTypes: [WIN,PLA,QIN,QPL,CWA,CWB,CWC,IWN,FCT,TCE,TRI,FF,QTT,DBL,TBL,DT,TT,SixUP]) {\n                status\n              }\n            }\n            raceMeetings(date: $date, venueCode: $venueCode)\n            {\n              id\n              status\n              venueCode\n              date\n              totalNumberOfRace\n              currentNumberOfRace\n              dateOfWeek\n              meetingType\n              totalInvestment\n              country {\n                code\n                namech\n                nameen\n                seq\n              }\n              races {\n                ...raceFragment\n                runners {\n                    id\n                    no\n                    standbyNo\n                    status\n                    name_ch\n                    name_en\n                    horse {\n                      id\n                      code\n                    }\n                    color\n                    barrierDrawNumber\n                    handicapWeight\n                    currentWeight\n                    currentRating\n                    internationalRating\n                    gearInfo\n                    racingColorFileName\n                    allowance\n                    trainerPreference\n                    last6run\n                    saddleClothNo\n                    trumpCard\n                    priority\n                    finalPosition\n                    deadHeat\n                    winOdds\n                    jockey {\n                      code\n                      name_en\n                      name_ch\n                    }\n                    trainer {\n                      code\n                      name_en\n                      name_ch\n                    }\n                }\n              }\n              obSt: pmPools(oddsTypes: [WIN, PLA]) {\n                leg {\n                  races\n                }\n                oddsType\n                comingleStatus\n              }\n              poolInvs: pmPools(oddsTypes: [WIN,PLA,QIN,QPL,CWA,CWB,CWC,IWN,FCT,TCE,TRI,FF,QTT,DBL,TBL,DT,TT,SixUP]) {\n                id\n                leg {\n                  number\n                  races\n                }\n                status\n                sellStatus\n                oddsType\n                investment\n                mergedPoolId\n                lastUpdateTime\n              }\n              ...racingBlockFragment\n              pmPools(oddsTypes: []) {\n                id\n              }\n              jkcInstNo : foPools(oddsTypes: [JKC], filters: [\"top\"]) {\n                instNo\n              }\n              tncInstNo : foPools(oddsTypes: [TNC], filters: [\"top\"]) {\n                instNo\n              }\n            }\n        }\n    \nfragment raceFragment on Race {\n    id\n    no\n    status\n    raceName_en\n    raceName_ch\n    postTime\n    country_en\n    country_ch\n    distance\n    wageringFieldSize\n    go_en\n    go_ch\n    ratingType\n    raceTrack {\n      description_en\n      description_ch\n    }\n    raceCourse {\n      description_en\n      description_ch\n      displayCode\n    }\n    claCode\n    raceClass_en\n    raceClass_ch\n    judgeSigns {\n      value_en\n    }\n  }\nfragment racingBlockFragment on RaceMeeting {\n    jpEsts: pmPools(oddsTypes: [WIN,PLA,TCE,TRI,FF,QTT,DT,TT,SixUP], filters: [\"jackpot\", \"estimatedDividend\"]) {\n      leg {\n        number\n        races\n      }\n      oddsType\n      jackpot\n      estimatedDividend\n      mergedPoolId\n    }\n    poolInvs: pmPools(oddsTypes: [WIN,PLA,QIN,QPL,CWA,CWB,CWC,IWN,FCT,TCE,TRI,FF,QTT,DBL,TBL,DT,TT,SixUP]) {\n      id\n      leg {\n        races\n      }\n    }\n    penetrometerReadings(filters:[\"first\"]) {\n      reading\n      readingTime\n    }\n    hammerReadings(filters:[\"first\"]) {\n      reading\n      readingTime\n    }\n    changeHistories(filters:[\"top3\"]) {\n      type\n      time\n      raceNo\n      runnerNo\n      horseName_ch\n      horseName_en\n      jockeyName_ch\n      jockeyName_en\n      scratchHorseName_ch\n      scratchHorseName_en\n      handicapWeight\n      scrResvIndicator\n    }\n  }\n\n"
 POINTS = ("before_rollover", "after_rollover", "t5", "t3", "after_start")
 CLOSED = {"STOP_SELL", "CLOSE", "CLOSED"}
 OPEN = {"START_SELL"}
@@ -47,17 +42,22 @@ def request(url, headers, data=None):
     return json.loads(gzip.decompress(raw) if raw.startswith(b"\x1f\x8b") else raw)
 
 
-def market(day, venue=None):
+def market(day, venue=None, *, race_no=None):
     query = QUERY if venue else GATE
-    args = {"date": day}
+    args = {"date": day if venue else None, "venueCode": venue}
     if venue:
-        args.update(venue=venue, types=["QIN", "WIN"])
-    url = ENDPOINT + "?" + urlencode({"query": query, "variables": json.dumps(args)})
+        args.update(raceNo=race_no, oddsTypes=["QIN", "WIN"])
+    tokens = re.findall(r'"(?:\\.|[^"\\])*"|[_A-Za-z][_0-9A-Za-z]*|\\.\\.\\.|[^\\s,]', query)
+    compact = "".join((" " if i and tokens[i-1][-1].isalnum() and token[0].isalnum() else "") + token
+                      for i, token in enumerate(tokens))
+    url = ENDPOINT + "?" + urlencode({"query": compact, "variables": json.dumps(args, sort_keys=True, separators=(",", ":"))})
     payload = request(url, {"User-Agent": "Mozilla/5.0", "Origin": "https://bet.hkjc.com",
                             "Referer": "https://bet.hkjc.com/", "Content-Type": "application/json"})
     if payload.get("errors"):
         raise ValueError("HKJC query rejected")
-    return [m for m in payload["data"]["raceMeetings"] if m["date"] == day
+    if venue:
+        return payload["data"]["raceMeetings"] or []
+    return [m for m in (payload["data"]["raceMeetings"] or []) if m["date"] == day
             and m["venueCode"] in ("ST", "HV")
             and m["id"].startswith("MTG_" + day.replace("-", "") + "_")
             and (not venue or m["venueCode"] == venue)]
@@ -234,10 +234,12 @@ def main():
     while now() <= last + timedelta(minutes=25):
         tick = time.monotonic()
         try:
-            meetings = market(day, venue)
-            if len(meetings) != 1:
+            calendars = [m for m in market(day) if m["venueCode"] == venue]
+            pools = market(day, venue)
+            if len(calendars) != 1 or len(pools) != 1:
                 raise ValueError("Meeting not uniquely identified")
-            recorder.observe(meetings[0], now())
+            meeting = {**calendars[0], "pmPools": pools[0]["pmPools"]}
+            recorder.observe(meeting, now())
         except (OSError, ValueError, KeyError, TypeError):
             time.sleep(8)
             continue
@@ -255,7 +257,7 @@ def main():
                     continue
                 saved.add(n)
                 print(f"Race {n} archived.", flush=True)
-        if len(saved) == len(meetings[0]["races"]):
+        if len(saved) == len(meeting["races"]):
             if not healthy:
                 raise SystemExit("No complete Quinella board observed.")
             return
@@ -264,7 +266,14 @@ def main():
 
 
 if __name__ == "__main__":
-    if os.environ.get("QIN_WRITE_TEST") == "true":
+    if os.environ.get("QIN_SOURCE_TEST") == "true":
+        meetings = market("2026-11-08", "ST")
+        pools = meetings[0]["pmPools"] if len(meetings) == 1 else []
+        boards = [p for p in pools if p["oddsType"] == "QIN" and p["oddsNodes"]]
+        if not boards:
+            raise SystemExit("HKJC source returned no historical Quinella boards.")
+        print(f"HKJC source returned {len(boards)} historical Quinella boards.")
+    elif os.environ.get("QIN_WRITE_TEST") == "true":
         try:
             publish({"date": now().date().isoformat(), "venue": "TEST", "race": 0,
                      "purpose": "private archive write test"}, smoke_test=True)
