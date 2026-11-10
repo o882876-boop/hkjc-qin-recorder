@@ -193,12 +193,14 @@ class Recorder:
                 "points": points, "combinations": rows}
 
 
-def publish(record):
+def publish(record, *, smoke_test=False):
     repo = os.environ["PRIVATE_DATA_REPO"]
     token = os.environ["PRIVATE_DATA_TOKEN"]
     run_id = os.environ["GITHUB_RUN_ID"]
     attempt = os.environ["GITHUB_RUN_ATTEMPT"]
     path = f"qin-history/{record['date']}_{record['venue']}/race-{record['race']:02}-{run_id}-{attempt}.json"
+    if smoke_test:
+        path = f"qin-diagnostics/write-test-{run_id}-{attempt}.json"
     body = {"branch": "odds-data", "message": "Archive Quinella snapshots",
             "content": base64.b64encode(json.dumps(record, indent=2).encode()).decode()}
     url = f"https://api.github.com/repos/{repo}/contents/{path}"
@@ -262,4 +264,12 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if os.environ.get("QIN_WRITE_TEST") == "true":
+        try:
+            publish({"date": now().date().isoformat(), "venue": "TEST", "race": 0,
+                     "purpose": "private archive write test"}, smoke_test=True)
+        except (OSError, KeyError):
+            raise SystemExit("Private archive write test failed.") from None
+        print("Private archive write test passed.")
+    else:
+        main()
