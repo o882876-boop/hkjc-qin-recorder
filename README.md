@@ -20,10 +20,10 @@ standard Ubuntu runner in a public repository.
 
 Manual checks: `source_test` checks the live HKJC source. HKJC serves only
 the current or next meeting, never history. `write_test` writes and lists a
-file in `qin-diagnostics/`. `rehearsal` runs the real capture loop for 2.5 minutes on the
+file in `qin-diagnostics/`. `rehearsal` runs the real capture loop for 4 minutes on the
 next live race with the clock shifted to just before its T-5, saves the record
 to `qin-diagnostics/rehearsal-RUN.json`, reads it back, and logs how many
-seconds after each target the T-5 and T-3 boards were taken.
+seconds after each target the T-5, T-3 and T-2 boards were taken.
 
 ## Snapshots (race N)
 
@@ -31,8 +31,11 @@ seconds after each target the T-5 and T-3 boards were taken.
 |---|---|
 | `before_rollover` | first poll after race N-1 stops selling (the off) |
 | `after_rollover` | 2 min after race N-1 WIN payout (`anchor` says if a fallback was used: result + 10 min, or off + 14 min) |
-| `t5`, `t3` | 5 / 3 min before race N's post time; re-taken if HKJC moves the post time |
+| `t5`, `t3`, `t2` | 5 / 3 / 2 min before race N's post time; re-taken if HKJC moves the post time |
 | `after_start` | first closed board at race N's off. If HKJC withdraws the board, `basis` starts with `FALLBACK_` and the last open board (at most 60 s old) is used |
+
+The per-combination `drop_pct` includes T-3 to T-2 and T-2 to the final board,
+plus the existing T-3 to final comparison. Older archives have no `t2`.
 
 Race 1 has no rollover points. The recorder wakes at each target time and
 normally takes the snapshot about 1 s after it; if a poll fails it keeps

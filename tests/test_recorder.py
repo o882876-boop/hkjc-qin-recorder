@@ -89,8 +89,8 @@ def obs(record, name):
     return point and datetime.fromisoformat(point["observed_at"])
 
 
-class FivePoints(unittest.TestCase):
-    def test_normal_meeting_r2_has_five_points_at_the_right_times(self):
+class SnapshotPoints(unittest.TestCase):
+    def test_normal_meeting_r2_has_six_points_at_the_right_times(self):
         _, pub = simulate(card(), P1 - M(45), P1 + M(65))
         t, r2 = pub[2]
         self.assertEqual(r2["missing"], {})
@@ -101,6 +101,11 @@ class FivePoints(unittest.TestCase):
         self.assertTrue(off1 + M(11) <= obs(r2, "after_rollover") <= off1 + M(11) + rec.WINDOW)
         self.assertTrue(post2 - M(5) <= obs(r2, "t5") <= post2 - M(5) + rec.WINDOW)
         self.assertTrue(post2 - M(3) <= obs(r2, "t3") <= post2 - M(3) + rec.WINDOW)
+        self.assertTrue(post2 - M(2) <= obs(r2, "t2") <= post2 - M(2) + rec.WINDOW)
+        changes = r2["combinations"][0]["drop_pct"]
+        self.assertIn("t3_to_t2", changes)
+        self.assertIn("t2_to_after_start", changes)
+        self.assertIn("t3_to_after_start", changes)
         self.assertTrue(post2 <= obs(r2, "after_start") <= post2 + rec.WINDOW)
         self.assertEqual(r2["points"]["after_start"]["basis"], "closed_board_after_stop_sell")
         self.assertEqual(r2["points"]["after_start"]["sell_status"], "STOP_SELL")
@@ -108,11 +113,11 @@ class FivePoints(unittest.TestCase):
         self.assertEqual(len(r2["combinations"]), 66)
         self.assertLess(paid1, post2)
 
-    def test_first_race_has_only_three_points(self):
+    def test_first_race_has_only_four_points(self):
         _, pub = simulate(card(), P1 - M(45), P1 + M(5))
         r1 = pub[1][1]
         self.assertEqual(r1["missing"], {"before_rollover": "first_race", "after_rollover": "first_race"})
-        self.assertTrue(all(r1["points"][k] for k in ("t5", "t3", "after_start")))
+        self.assertTrue(all(r1["points"][k] for k in ("t5", "t3", "t2", "after_start")))
 
 
 class StatusAndTiming(unittest.TestCase):
@@ -162,15 +167,16 @@ class StatusAndTiming(unittest.TestCase):
         r2 = pub[2][1]
         self.assertEqual(r2["missing"], {"after_rollover": "collides_with_t5"})
 
-    def test_post_time_delay_retakes_t5_and_t3(self):
+    def test_post_time_delay_retakes_all_countdown_points(self):
         post2 = P1 + M(30)
-        moved = lambda t: post2 + M(6) if t >= post2 - M(2) else post2
+        moved = lambda t: post2 + M(6) if t >= post2 - M(1) else post2
         races = card(2, {2: {"delay": 6, "post_shown": moved}})
         _, pub = simulate(races, P1 - M(45), P1 + M(45))
         r2 = pub[2][1]
         self.assertTrue(post2 + M(1) <= obs(r2, "t5") <= post2 + M(1) + rec.WINDOW)
         self.assertTrue(post2 + M(3) <= obs(r2, "t3") <= post2 + M(3) + rec.WINDOW)
-        self.assertEqual({s["point"] for s in r2["superseded"]}, {"t5", "t3"})
+        self.assertTrue(post2 + M(4) <= obs(r2, "t2") <= post2 + M(4) + rec.WINDOW)
+        self.assertEqual({s["point"] for s in r2["superseded"]}, {"t5", "t3", "t2"})
 
     def test_scratched_horse_board_still_accepted(self):
         races = card(2, {2: {"scratched": [7]}})
@@ -262,13 +268,13 @@ class MainLoop(unittest.TestCase):
                 self.assertEqual(json.loads(FakeArchive.files[path])["missing"], {}, path)
         for path in self.races():
             record = json.loads(FakeArchive.files[path])
-            for name in ("t5", "t3", "after_rollover"):
+            for name in ("t5", "t3", "t2", "after_rollover"):
                 point = record["points"][name]
                 if point:
                     late = datetime.fromisoformat(point["observed_at"]) - datetime.fromisoformat(point["target_at"])
                     self.assertTrue(timedelta(0) <= late <= timedelta(seconds=2), f"{path} {name} {late}")
 
-    def test_long_meeting_hands_over_and_next_run_completes_all_five_points(self):
+    def test_long_meeting_hands_over_and_next_run_completes_all_six_points(self):
         races = card(9)
         end = self.run_main(races, P1 - M(48), "200", limit=M(130))
         for run_id in range(201, 206):

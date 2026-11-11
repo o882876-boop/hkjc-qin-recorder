@@ -1,11 +1,11 @@
 """Capture timestamped HKJC Quinella boards and publish per-race records privately.
 
-Five snapshots per race N (N >= 2):
+Six snapshots per race N (N >= 2):
   before_rollover  first poll after race N-1 stops selling (the off)
   after_rollover   2 min after race N-1 WIN payout (fallback: 10 min after result)
-  t5, t3           5 and 3 min before race N's published post time
+  t5, t3, t2       5, 3 and 2 min before race N's published post time
   after_start      first closed board after race N's off
-Race 1 only has t5, t3 and after_start.
+Race 1 only has t5, t3, t2 and after_start.
 """
 import base64
 import gzip
@@ -26,8 +26,10 @@ ENDPOINT = "https://info.cld.hkjc.com/graphql/base-get/"
 # Both query strings are used verbatim: the HKJC endpoint only accepts whitelisted query shapes.
 QUERY = "\n      query sp4e_racing_pmPool($date: String, $venueCode: String, $oddsTypes: [OddsType], $raceNo: Int) {\n          raceMeetings(date: $date, venueCode: $venueCode)\n          {\n            pmPools(oddsTypes: $oddsTypes, raceNo: $raceNo) {\n              id\n              status\n              sellStatus\n              oddsType\n              lastUpdateTime\n              oddsLastUpdateTime\n              guarantee\n              minTicketCost\n              name_en\n              name_ch\n              leg {\n                number\n                races\n              }\n              cWinSelections {\n                composite\n                name_ch\n                name_en\n                starters\n              }\n              oddsNodes {\n                combString\n                oddsValue\n                hotFavourite\n                oddsDropValue\n                bankerOdds {\n                  combString\n                  oddsValue\n                }\n              }\n            }\n          }\n      }\n\n"
 GATE = "\n        \n        \n        query raceMeetings($date: String, $venueCode: String) {\n            timeOffset {\n              rc\n            }\n            activeMeetings : raceMeetings\n            {\n              id\n              venueCode\n              date\n              status\n              races {\n                no\n                postTime\n                status\n                wageringFieldSize\n              }\n              poolInvs: pmPools(oddsTypes: [WIN,PLA,QIN,QPL,CWA,CWB,CWC,IWN,FCT,TCE,TRI,FF,QTT,DBL,TBL,DT,TT,SixUP]) {\n                status\n              }\n            }\n            raceMeetings(date: $date, venueCode: $venueCode)\n            {\n              id\n              status\n              venueCode\n              date\n              totalNumberOfRace\n              currentNumberOfRace\n              dateOfWeek\n              meetingType\n              totalInvestment\n              country {\n                code\n                namech\n                nameen\n                seq\n              }\n              races {\n                ...raceFragment\n                runners {\n                    id\n                    no\n                    standbyNo\n                    status\n                    name_ch\n                    name_en\n                    horse {\n                      id\n                      code\n                    }\n                    color\n                    barrierDrawNumber\n                    handicapWeight\n                    currentWeight\n                    currentRating\n                    internationalRating\n                    gearInfo\n                    racingColorFileName\n                    allowance\n                    trainerPreference\n                    last6run\n                    saddleClothNo\n                    trumpCard\n                    priority\n                    finalPosition\n                    deadHeat\n                    winOdds\n                    jockey {\n                      code\n                      name_en\n                      name_ch\n                    }\n                    trainer {\n                      code\n                      name_en\n                      name_ch\n                    }\n                }\n              }\n              obSt: pmPools(oddsTypes: [WIN, PLA]) {\n                leg {\n                  races\n                }\n                oddsType\n                comingleStatus\n              }\n              poolInvs: pmPools(oddsTypes: [WIN,PLA,QIN,QPL,CWA,CWB,CWC,IWN,FCT,TCE,TRI,FF,QTT,DBL,TBL,DT,TT,SixUP]) {\n                id\n                leg {\n                  number\n                  races\n                }\n                status\n                sellStatus\n                oddsType\n                investment\n                mergedPoolId\n                lastUpdateTime\n              }\n              ...racingBlockFragment\n              pmPools(oddsTypes: []) {\n                id\n              }\n              jkcInstNo : foPools(oddsTypes: [JKC], filters: [\"top\"]) {\n                instNo\n              }\n              tncInstNo : foPools(oddsTypes: [TNC], filters: [\"top\"]) {\n                instNo\n              }\n            }\n        }\n    \nfragment raceFragment on Race {\n    id\n    no\n    status\n    raceName_en\n    raceName_ch\n    postTime\n    country_en\n    country_ch\n    distance\n    wageringFieldSize\n    go_en\n    go_ch\n    ratingType\n    raceTrack {\n      description_en\n      description_ch\n    }\n    raceCourse {\n      description_en\n      description_ch\n      displayCode\n    }\n    claCode\n    raceClass_en\n    raceClass_ch\n    judgeSigns {\n      value_en\n    }\n  }\nfragment racingBlockFragment on RaceMeeting {\n    jpEsts: pmPools(oddsTypes: [WIN,PLA,TCE,TRI,FF,QTT,DT,TT,SixUP], filters: [\"jackpot\", \"estimatedDividend\"]) {\n      leg {\n        number\n        races\n      }\n      oddsType\n      jackpot\n      estimatedDividend\n      mergedPoolId\n    }\n    poolInvs: pmPools(oddsTypes: [WIN,PLA,QIN,QPL,CWA,CWB,CWC,IWN,FCT,TCE,TRI,FF,QTT,DBL,TBL,DT,TT,SixUP]) {\n      id\n      leg {\n        races\n      }\n    }\n    penetrometerReadings(filters:[\"first\"]) {\n      reading\n      readingTime\n    }\n    hammerReadings(filters:[\"first\"]) {\n      reading\n      readingTime\n    }\n    changeHistories(filters:[\"top3\"]) {\n      type\n      time\n      raceNo\n      runnerNo\n      horseName_ch\n      horseName_en\n      jockeyName_ch\n      jockeyName_en\n      scratchHorseName_ch\n      scratchHorseName_en\n      handicapWeight\n      scrResvIndicator\n    }\n  }\n\n"
-POINTS = ("before_rollover", "after_rollover", "t5", "t3", "after_start")
-OPEN_POINTS = POINTS[:4]
+PRE_POST_MINUTES = {"t5": 5, "t3": 3, "t2": 2}
+OPEN_POINTS = ("before_rollover", "after_rollover", *PRE_POST_MINUTES)
+POINTS = (*OPEN_POINTS, "after_start")
+CHANGE_INTERVALS = (*zip(POINTS, POINTS[1:]), ("t3", "after_start"))
 # Status vocabulary taken from HKJC's own betting site code (bet.hkjc.com main bundle).
 RACE_OFF = {"CLOSED", "RESULT"}             # race no longer selling: off / finished
 RACE_RESULT = {"RESULT"}
@@ -289,7 +291,7 @@ class Recorder:
             for name in OPEN_POINTS:
                 target = targets[name]
                 point = s["points"].get(name)
-                if point and name in ("t5", "t3") and target and point["target_at"] != target.isoformat() \
+                if point and name in PRE_POST_MINUTES and target and point["target_at"] != target.isoformat() \
                         and captured < target and "start" not in s:
                     s["superseded"].append({"point": name, "reason": "post time changed", "snapshot": point})
                     s["points"].pop(name)
@@ -331,7 +333,8 @@ class Recorder:
     def targets(s, prev):
         post = s["post"]
         targets = {"before_rollover": prev.get("close"),
-                   "after_rollover": None, "t5": post - timedelta(minutes=5), "t3": post - timedelta(minutes=3)}
+                   "after_rollover": None,
+                   **{name: post - timedelta(minutes=minutes) for name, minutes in PRE_POST_MINUTES.items()}}
         anchors = {}
         if prev.get("paid"):
             targets["after_rollover"], anchors["after_rollover"] = prev["paid"] + timedelta(minutes=2), "prev_win_payout_plus_2min"
@@ -378,7 +381,7 @@ class Recorder:
                            key=lambda c: tuple(map(int, c.split("-")))):
             prices = {name: p["odds"].get(pair) if p else None for name, p in points.items()}
             changes = {}
-            for left, right in zip(POINTS, POINTS[1:]):
+            for left, right in CHANGE_INTERVALS:
                 a, b = prices[left], prices[right]
                 changes[f"{left}_to_{right}"] = round(100 * (a - b) / a, 2) if a and b else None
             rows.append({"combination": pair, "odds": prices, "drop_pct": changes})
@@ -589,7 +592,7 @@ def main():
                 if archive.put(path, record, f"Archive Quinella R{n}"):
                     recorder.state[n]["published"] = archive.run
                     got = [k for k in POINTS if record["points"][k]]
-                    log(f"Race {n} archived: {len(got)}/5 points {got}; missing {record['missing'] or 'none'}")
+                    log(f"Race {n} archived: {len(got)}/{len(POINTS)} points {got}; missing {record['missing'] or 'none'}")
         if all("published" in recorder.state.get(int(r["no"]), {}) for r in meeting["races"]):
             log("All races archived.")
             return
@@ -619,7 +622,7 @@ def main():
 
 def rehearsal():
     """End-to-end test on the live HKJC meeting: shift the clock to 20 s before the next race's
-    T-5, run the real capture loop for ~2.5 min (T-5 and T-3), save the record to the private
+    T-5, run the real capture loop for 4 min (T-5, T-3 and T-2), save the record to the private
     archive and read it back. Times in the saved record are on the shifted clock."""
     global CLOCK_OFFSET
     archive = Archive()
@@ -634,7 +637,7 @@ def rehearsal():
     n, post = int(upcoming[0]["no"]), stamp(upcoming[0]["postTime"])
     CLOCK_OFFSET = (post - timedelta(minutes=5, seconds=20)) - datetime.now(HK)
     log(f"Rehearsal on {meeting['id']} R{n}; clock shifted by {CLOCK_OFFSET.total_seconds():.0f} s")
-    recorder, end = Recorder(), now() + timedelta(minutes=2, seconds=35)
+    recorder, end = Recorder(), now() + timedelta(minutes=4)
     while now() < end:
         tick = time.monotonic()
         try:
@@ -658,7 +661,7 @@ def rehearsal():
         raise SystemExit("Rehearsal record could not be saved.")
     stored = archive.read(path)
     problems = []
-    for name in ("t5", "t3"):
+    for name in PRE_POST_MINUTES:
         point = stored["points"].get(name)
         if not point:
             problems.append(f"{name} missing ({stored['missing'].get(name)})")

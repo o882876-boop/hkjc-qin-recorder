@@ -16,7 +16,7 @@ on:
         type: boolean
         default: false
       rehearsal:
-        description: 2.5-min end-to-end rehearsal (live HKJC board at a shifted T-5/T-3, saved to qin-diagnostics)
+        description: 4-min end-to-end rehearsal (live HKJC board at a shifted T-5/T-3/T-2, saved to qin-diagnostics)
         type: boolean
         default: false
 permissions:
