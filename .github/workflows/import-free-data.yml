@@ -1,0 +1,109 @@
+name: Backfill free racing archives
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/import-free-data.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: free-racing-archive-import
+  cancel-in-progress: false
+jobs:
+  import:
+    if: github.repository == 'o882876-boop/hkjc-qin-recorder' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SOURCE_COMMIT: 2c2a83241d553717b43b0ea272903102c49d5ec9
+    steps:
+      - name: Fetch pinned free source and validate archive
+        run: |
+          export STAGING_DIR="$RUNNER_TEMP/racing-source"
+          git init -q "$STAGING_DIR"
+          git -C "$STAGING_DIR" remote add origin https://github.com/sleepingarhat/tianxi-racing.git
+          git -C "$STAGING_DIR" sparse-checkout set data horses/form_records horses/injury horses/profiles entries jockeys trainers speedpro/data
+          git -C "$STAGING_DIR" fetch --depth=1 --no-tags origin "$SOURCE_COMMIT"
+          git -C "$STAGING_DIR" checkout -q --detach FETCH_HEAD
+          test "$(git -C "$STAGING_DIR" rev-parse HEAD)" = "$SOURCE_COMMIT"
+          python3 - <<'PY'
+          import csv, hashlib, json, os, shutil, subprocess
+          from pathlib import Path
+          from collections import defaultdict
+          root=Path(os.environ["STAGING_DIR"])
+          out=root/"export"
+          out.mkdir()
+          prefixes=("data/","horses/form_records/","horses/injury/","horses/profiles/","entries/","jockeys/","trainers/","speedpro/data/")
+          paths=subprocess.check_output(["git","-C",str(root),"ls-tree","-r","--name-only","HEAD"],text=True).splitlines()
+          files=[]
+          summary=defaultdict(lambda:dict(files=0,bytes=0,rows=0,empty_csv=0))
+          for name in paths:
+              if not name.startswith(prefixes) or Path(name).suffix.lower() not in (".csv",".json",".jsonl",".txt",".html"):
+                  continue
+              p=root/name
+              if p.is_symlink() or not p.is_file(): raise ValueError("Invalid entry "+name)
+              raw=p.read_bytes()
+              item=dict(path=name,bytes=len(raw),sha256=hashlib.sha256(raw).hexdigest())
+              group="/".join(name.split("/")[:2])
+              s=summary[group]; s["files"]+=1;s["bytes"]+=len(raw)
+              if p.suffix==".csv":
+                  with p.open(encoding="utf-8-sig",newline="") as f:
+                      reader=csv.reader(f); header=next(reader,[])
+                      rows=sum(1 for r in reader if any(x.strip() for x in r))
+                  item.update(rows=rows,columns=header)
+                  s["rows"]+=rows;s["empty_csv"]+=int(rows==0)
+              dest=out/name;dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes(raw)
+              if hashlib.sha256(dest.read_bytes()).hexdigest()!=item["sha256"]: raise ValueError("Copy mismatch")
+              files.append(item)
+          if len(files)<4000: raise ValueError("Unexpected incomplete source")
+          manifest=dict(source="https://github.com/sleepingarhat/tianxi-racing",source_commit=os.environ["SOURCE_COMMIT"],
+              files_count=len(files),bytes=sum(f["bytes"] for f in files),groups=dict(summary),files=files,
+              caveats=["Archived third-party records; not independently certified complete against HKJC.",
+              "Row counts include repeated snapshots and overlapping datasets; do not sum as unique races.",
+              "Event dates do not establish publication times; do not use later injury/profile data in historical pre-race tests.",
+              "Existing trackwork and trial originals remain under racing-data/trackwork/tianxi.",
+              "Original empty files are preserved and counted; missing historical live odds are not reconstructed."])
+          (out/"manifest.json").write_text(json.dumps(manifest,ensure_ascii=False,indent=2)+"\n")
+          (out/"README.md").write_text("# Free historical racing archive\n\nSource: "+manifest["source"]+"\n\nPinned commit: "+manifest["source_commit"]+"\n\nSee manifest.json for byte hashes, CSV row counts and empty files. This is a raw research archive, not a replacement for normalized official tables. Never infer pre-race availability from event dates. Existing trackwork/trials are stored separately to avoid duplication.\n")
+          print("Validated",len(files),"files;",manifest["bytes"],"bytes")
+          
+          PY
+      - name: Publish verified archive to private data branch
+        env:
+          PRIVATE_DATA_REPO: ${{ secrets.PRIVATE_DATA_REPO || vars.PRIVATE_DATA_REPO }}
+          PRIVATE_DATA_TOKEN: ${{ secrets.PRIVATE_DATA_TOKEN }}
+        run: |
+          STAGING_DIR="$RUNNER_TEMP/racing-source"
+          test -n "$PRIVATE_DATA_TOKEN"
+          test -n "$PRIVATE_DATA_REPO"
+          auth=$(printf 'x-access-token:%s' "$PRIVATE_DATA_TOKEN" | base64 -w0)
+          echo "::add-mask::$auth"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
+          export GIT_CONFIG_VALUE_0="Authorization: Basic $auth"
+
+          target="$RUNNER_TEMP/private-racing-target"
+          git init -q "$target"
+          git -C "$target" remote add origin "https://github.com/$PRIVATE_DATA_REPO.git"
+          git -C "$target" config user.name "github-actions[bot]"
+          git -C "$target" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for attempt in 1 2 3; do
+            git -C "$target" fetch --depth=1 --no-tags origin refs/heads/odds-data
+            git -C "$target" reset -q --hard FETCH_HEAD
+            relative=racing-data/free-archive/tianxi
+            archive="$target/$relative"
+            mkdir -p "$archive"
+            cp -a "$STAGING_DIR/export/." "$archive/"
+            git -C "$target" add -- "$relative"
+            if git -C "$target" diff --cached --quiet; then
+              echo "Source archive already published."
+              exit 0
+            fi
+            git -C "$target" commit -qm "Backfill free historical racing source archive"
+            if git -C "$target" push -q origin HEAD:refs/heads/odds-data; then
+              echo "Published archive commit $(git -C "$target" rev-parse HEAD)"
+              exit 0
+            fi
+            sleep "$attempt"
+          done
+          exit 1
