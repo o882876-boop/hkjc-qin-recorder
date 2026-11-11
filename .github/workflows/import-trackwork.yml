@@ -1,0 +1,126 @@
+name: Import historical trackwork
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/import-trackwork.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: trackwork-archive-import
+  cancel-in-progress: false
+
+jobs:
+  import:
+    if: github.event.repository.private == false && github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      SOURCE_COMMIT: 2c2a83241d553717b43b0ea272903102c49d5ec9
+      STAGING_DIR: ${{ runner.temp }}/trackwork-source
+    steps:
+      - name: Fetch and verify source data
+        run: |
+          git init -q "$STAGING_DIR"
+          git -C "$STAGING_DIR" remote add origin https://github.com/sleepingarhat/tianxi-racing.git
+          git -C "$STAGING_DIR" sparse-checkout set horses/trackwork trials
+          git -C "$STAGING_DIR" fetch --depth=1 --no-tags origin "$SOURCE_COMMIT"
+          git -C "$STAGING_DIR" checkout -q --detach FETCH_HEAD
+          test "$(git -C "$STAGING_DIR" rev-parse HEAD)" = "$SOURCE_COMMIT"
+
+          python3 - <<'PY'
+          import csv
+          import hashlib
+          import json
+          import os
+          from collections import Counter
+          from datetime import datetime
+          from pathlib import Path
+
+          root = Path(os.environ["STAGING_DIR"])
+          horses = sorted((root / "horses" / "trackwork").glob("trackwork_*.csv"))
+          trials = [root / "trials" / name for name in ("trial_results.csv", "trial_sessions.csv")]
+          if len(horses) != 2607 or sum(p.stat().st_size for p in horses) != 99796766:
+              raise SystemExit("Unexpected source file count or size")
+
+          index = []
+          types = Counter()
+          for path in horses + trials:
+              is_trackwork = path.parent.name == "trackwork"
+              if path.is_symlink() or not path.is_file():
+                  raise SystemExit("Unexpected archive entry")
+              with path.open(encoding="utf-8-sig", newline="") as handle:
+                  reader = csv.DictReader(handle)
+                  dates = []
+                  count = 0
+                  for row in reader:
+                      count += 1
+                      if is_trackwork:
+                          if row["horse_no"].strip().upper() != path.stem.removeprefix("trackwork_").upper():
+                              raise ValueError("Unexpected horse identifier")
+                          value = row.get("date", "").strip()
+                          if value:
+                              dates.append(datetime.strptime(value, "%d/%m/%Y").date().isoformat())
+                          types[row.get("work_type", "")] += 1
+                  entry = {"path": path.relative_to(root).as_posix(), "rows": count,
+                           "bytes": path.stat().st_size, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+                  if dates:
+                      entry.update(first_date=min(dates), last_date=max(dates))
+                  index.append(entry)
+
+          manifest = {"source": "https://github.com/sleepingarhat/tianxi-racing",
+                      "source_commit": os.environ["SOURCE_COMMIT"],
+                      "trackwork_files": len(horses),
+                      "trackwork_rows": sum(types.values()),
+                      "trackwork_types": dict(types),
+                      "files": index,
+                      "notes": "Source CSVs preserved byte-for-byte. Event dates do not establish historical publication times."}
+          (root / "trackwork-manifest.json").write_text(
+              json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+          print(f"Verified {len(horses)} horse CSVs, {sum(types.values())} rows and {len(trials)} trial files.")
+          print(f"Latest dated trackwork row: {max(x['last_date'] for x in index if 'last_date' in x)}")
+          PY
+
+      - name: Publish verified archive to private data branch
+        env:
+          PRIVATE_DATA_REPO: ${{ vars.PRIVATE_DATA_REPO }}
+          PRIVATE_DATA_TOKEN: ${{ secrets.PRIVATE_DATA_TOKEN }}
+        run: |
+          test -n "$PRIVATE_DATA_TOKEN"
+          test -n "$PRIVATE_DATA_REPO"
+          auth=$(printf 'x-access-token:%s' "$PRIVATE_DATA_TOKEN" | base64 -w0)
+          echo "::add-mask::$auth"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
+          export GIT_CONFIG_VALUE_0="Authorization: Basic $auth"
+
+          target="$RUNNER_TEMP/private-trackwork-target"
+          git init -q "$target"
+          git -C "$target" remote add origin "https://github.com/$PRIVATE_DATA_REPO.git"
+          git -C "$target" config user.name "github-actions[bot]"
+          git -C "$target" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for attempt in 1 2 3; do
+            git -C "$target" fetch --depth=1 --no-tags origin refs/heads/odds-data
+            git -C "$target" reset -q --hard FETCH_HEAD
+            relative=racing-data/trackwork/tianxi
+            archive="$target/$relative"
+            mkdir -p "$archive/horses/trackwork" "$archive/trials"
+            cp "$STAGING_DIR"/horses/trackwork/trackwork_*.csv "$archive/horses/trackwork/"
+            cp "$STAGING_DIR"/trials/trial_{results,sessions}.csv "$archive/trials/"
+            cp "$STAGING_DIR/trackwork-manifest.json" "$archive/manifest.json"
+            git -C "$target" add -- "$relative"
+            if git -C "$target" diff --cached --quiet; then
+              echo "Source archive already published."
+              exit 0
+            fi
+            git -C "$target" commit -qm "Backfill raw horse trackwork and trial records"
+            if git -C "$target" push -q origin HEAD:refs/heads/odds-data; then
+              echo "Published archive commit $(git -C "$target" rev-parse HEAD)"
+              exit 0
+            fi
+            sleep "$attempt"
+          done
+          exit 1
