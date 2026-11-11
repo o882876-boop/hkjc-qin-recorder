@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   import:
-    if: github.event.repository.private == false && github.ref_name == github.event.repository.default_branch
+    if: github.repository == 'o882876-boop/hkjc-qin-recorder' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 12
     env:
@@ -86,7 +86,7 @@ jobs:
 
       - name: Publish verified archive to private data branch
         env:
-          PRIVATE_DATA_REPO: ${{ vars.PRIVATE_DATA_REPO }}
+          PRIVATE_DATA_REPO: ${{ secrets.PRIVATE_DATA_REPO || vars.PRIVATE_DATA_REPO }}
           PRIVATE_DATA_TOKEN: ${{ secrets.PRIVATE_DATA_TOKEN }}
         run: |
           STAGING_DIR="$RUNNER_TEMP/trackwork-source"
