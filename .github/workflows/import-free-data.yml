@@ -27,7 +27,8 @@ jobs:
           git -C "$STAGING_DIR" checkout -q --detach FETCH_HEAD
           test "$(git -C "$STAGING_DIR" rev-parse HEAD)" = "$SOURCE_COMMIT"
           python3 - <<'PY'
-          import csv, hashlib, json, os, shutil, subprocess
+          import csv, hashlib, json, os, shutil, subprocess, io, re
+          from datetime import datetime
           from pathlib import Path
           from collections import defaultdict
           root=Path(os.environ["STAGING_DIR"])
@@ -35,36 +36,72 @@ jobs:
           out.mkdir()
           prefixes=("data/","horses/form_records/","horses/injury/","horses/profiles/","entries/","jockeys/","trainers/","speedpro/data/")
           paths=subprocess.check_output(["git","-C",str(root),"ls-tree","-r","--name-only","HEAD"],text=True).splitlines()
+          def parse_date(value):
+              value=value.strip()
+              for fmt in ("%Y-%m-%d","%d/%m/%Y","%d/%m/%y","%Y/%m/%d","%d-%m-%Y"):
+                  try: return datetime.strptime(value[:10] if fmt in ("%Y-%m-%d","%Y/%m/%d") else value,fmt).date().isoformat()
+                  except ValueError: pass
+              return None
           files=[]
+          excluded_files=[]
+          removed_rows=0
           summary=defaultdict(lambda:dict(files=0,bytes=0,rows=0,empty_csv=0))
           for name in paths:
               if not name.startswith(prefixes) or Path(name).suffix.lower() not in (".csv",".json",".jsonl",".txt",".html"):
                   continue
+              if re.match(r"data/20(1[0-9]|2[0-2])/",name):
+                  excluded_files.append(name)
+                  continue
               p=root/name
               if p.is_symlink() or not p.is_file(): raise ValueError("Invalid entry "+name)
               raw=p.read_bytes()
-              item=dict(path=name,bytes=len(raw),sha256=hashlib.sha256(raw).hexdigest())
+              source_hash=hashlib.sha256(raw).hexdigest()
+              item=dict(path=name,source_sha256=source_hash)
               group="/".join(name.split("/")[:2])
-              s=summary[group]; s["files"]+=1;s["bytes"]+=len(raw)
+              rows=None
               if p.suffix==".csv":
-                  with p.open(encoding="utf-8-sig",newline="") as f:
-                      reader=csv.reader(f); header=next(reader,[])
-                      rows=sum(1 for r in reader if any(x.strip() for x in r))
-                  item.update(rows=rows,columns=header)
+                  reader=csv.reader(io.StringIO(raw.decode("utf-8-sig")))
+                  header=next(reader,[])
+                  all_rows=[r for r in reader if any(x.strip() for x in r)]
+                  candidates=("injury_date","diagnosis_date","arrive_date","race_date","date","prior_date","work_date","meeting_date","as_of_date","last_race_date")
+                  key=next((c for c in candidates if c in header),None)
+                  kept=[]; dates=[]; unknown=0
+                  for row in all_rows:
+                      date=parse_date(row[header.index(key)]) if key and header.index(key)<len(row) else None
+                      if date and date<"2023-01-01": continue
+                      if date: dates.append(date)
+                      elif key: unknown+=1
+                      kept.append(row)
+                  removed=len(all_rows)-len(kept)
+                  removed_rows+=removed
+                  if removed and not kept:
+                      excluded_files.append(name)
+                      continue
+                  if removed:
+                      buf=io.StringIO(newline="")
+                      writer=csv.writer(buf);writer.writerow(header);writer.writerows(kept)
+                      raw=buf.getvalue().encode("utf-8")
+                  rows=len(kept)
+                  item.update(rows=rows,columns=header,removed_pre2023_rows=removed,date_column=key,unknown_date_rows=unknown)
+                  if dates: item.update(first_date=min(dates),last_date=max(dates))
+              item.update(bytes=len(raw),sha256=hashlib.sha256(raw).hexdigest())
+              s=summary[group];s["files"]+=1;s["bytes"]+=len(raw)
+              if rows is not None:
                   s["rows"]+=rows;s["empty_csv"]+=int(rows==0)
               dest=out/name;dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes(raw)
               if hashlib.sha256(dest.read_bytes()).hexdigest()!=item["sha256"]: raise ValueError("Copy mismatch")
               files.append(item)
-          if len(files)<4000: raise ValueError("Unexpected incomplete source")
+          if len(files)<2000: raise ValueError("Unexpected incomplete source")
           manifest=dict(source="https://github.com/sleepingarhat/tianxi-racing",source_commit=os.environ["SOURCE_COMMIT"],
-              files_count=len(files),bytes=sum(f["bytes"] for f in files),groups=dict(summary),files=files,
+              start_date="2023-01-01",excluded_files=excluded_files,removed_pre2023_rows=removed_rows,files_count=len(files),bytes=sum(f["bytes"] for f in files),groups=dict(summary),files=files,
               caveats=["Archived third-party records; not independently certified complete against HKJC.",
               "Row counts include repeated snapshots and overlapping datasets; do not sum as unique races.",
               "Event dates do not establish publication times; do not use later injury/profile data in historical pre-race tests.",
               "Existing trackwork and trial originals remain under racing-data/trackwork/tianxi.",
               "Original empty files are preserved and counted; missing historical live odds are not reconstructed."])
           (out/"manifest.json").write_text(json.dumps(manifest,ensure_ascii=False,indent=2)+"\n")
-          (out/"README.md").write_text("# Free historical racing archive\n\nSource: "+manifest["source"]+"\n\nPinned commit: "+manifest["source_commit"]+"\n\nSee manifest.json for byte hashes, CSV row counts and empty files. This is a raw research archive, not a replacement for normalized official tables. Never infer pre-race availability from event dates. Existing trackwork/trials are stored separately to avoid duplication.\n")
+          (out/"summary.json").write_text(json.dumps({k:v for k,v in manifest.items() if k not in ("files","excluded_files")},ensure_ascii=False,indent=2)+"\n")
+          (out/"README.md").write_text("# Free historical racing archive\n\nSource: "+manifest["source"]+"\n\nPinned commit: "+manifest["source_commit"]+"\n\nSee manifest.json for byte hashes, CSV row counts and empty files. This archive retains dated records from 2023-01-01 onward; filtered CSVs include original and output hashes. Undated reference data is retained. This is a research archive, not a replacement for normalized official tables. Never infer pre-race availability from event dates. Existing trackwork/trials are stored separately to avoid duplication.\n")
           print("Validated",len(files),"files;",manifest["bytes"],"bytes")
           
           PY
@@ -92,6 +129,8 @@ jobs:
             git -C "$target" reset -q --hard FETCH_HEAD
             relative=racing-data/free-archive/tianxi
             archive="$target/$relative"
+            # Replace only this importer-owned archive, never existing racing tables.
+            rm -rf -- "$archive"
             mkdir -p "$archive"
             cp -a "$STAGING_DIR/export/." "$archive/"
             git -C "$target" add -- "$relative"
