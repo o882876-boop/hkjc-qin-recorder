@@ -20,10 +20,10 @@ jobs:
     timeout-minutes: 12
     env:
       SOURCE_COMMIT: 2c2a83241d553717b43b0ea272903102c49d5ec9
-      STAGING_DIR: ${{ runner.temp }}/trackwork-source
     steps:
       - name: Fetch and verify source data
         run: |
+          export STAGING_DIR="$RUNNER_TEMP/trackwork-source"
           git init -q "$STAGING_DIR"
           git -C "$STAGING_DIR" remote add origin https://github.com/sleepingarhat/tianxi-racing.git
           git -C "$STAGING_DIR" sparse-checkout set horses/trackwork trials
@@ -89,6 +89,7 @@ jobs:
           PRIVATE_DATA_REPO: ${{ vars.PRIVATE_DATA_REPO }}
           PRIVATE_DATA_TOKEN: ${{ secrets.PRIVATE_DATA_TOKEN }}
         run: |
+          STAGING_DIR="$RUNNER_TEMP/trackwork-source"
           test -n "$PRIVATE_DATA_TOKEN"
           test -n "$PRIVATE_DATA_REPO"
           auth=$(printf 'x-access-token:%s' "$PRIVATE_DATA_TOKEN" | base64 -w0)
