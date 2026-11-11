@@ -56,7 +56,9 @@ class FakeRace:
         pools = [{"id": f"{MID}QIN{self.no}", "oddsType": "QIN", "leg": {"races": [self.no]},
                   "sellStatus": sell, "status": sell, "oddsLastUpdateTime": t.isoformat(), "oddsNodes": odds},
                  {"id": f"{MID}WIN{self.no}", "oddsType": "WIN", "leg": {"races": [self.no]},
-                  "sellStatus": sell, "status": win, "oddsNodes": []}]
+                  "sellStatus": sell, "status": win, "oddsLastUpdateTime": t.isoformat(),
+                  "oddsNodes": [{"combString": f"{i:02}", "oddsValue": 4 + i}
+                                for i in range(1, self.field + 1) if i not in self.scratched] if nodes else []}]
         return race, pools
 
 
@@ -94,6 +96,10 @@ class SnapshotPoints(unittest.TestCase):
         _, pub = simulate(card(), P1 - M(45), P1 + M(65))
         t, r2 = pub[2]
         self.assertEqual(r2["missing"], {})
+        self.assertEqual(r2["win_missing"], {})
+        for name in rec.POINTS:
+            self.assertEqual(r2["win_points"][name]["observed_at"], r2["points"][name]["observed_at"])
+            self.assertEqual(len(r2["win_points"][name]["odds"]), 12)
         off1, post2 = P1, P1 + M(30)
         self.assertTrue(off1 <= obs(r2, "before_rollover") <= off1 + rec.WINDOW)
         paid1 = datetime.fromisoformat(pub[1][1]["events"]["win_payout"] or r2["target_times"]["after_rollover"])

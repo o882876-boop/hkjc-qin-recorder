@@ -1,6 +1,6 @@
 # HKJC Quinella recorder
 
-A public GitHub Actions workflow records HKJC Quinella prices and publishes
+A public GitHub Actions workflow records HKJC Quinella and Win prices and publishes
 race JSON files directly to a separate private repository. It runs on a
 standard Ubuntu runner in a public repository.
 
@@ -55,3 +55,7 @@ and a reason. Their boards are never relabelled.
 ## Testing
 
 `python3 -m unittest discover -s tests -v` runs offline race-day simulations.
+
+## Win snapshots
+
+Each new race JSON includes `win_points` and `win_missing` at the same six targets as Quinella. Each WIN board is keyed by horse number and keeps its own HKJC price update time. Both pools are read in the same poll, with separate validation and cutoff fallback labels. Compare source update times when inferring which pool moved first. Older race records may have no WIN snapshots.

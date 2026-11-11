@@ -147,6 +147,38 @@ def board(pool, race, captured):
             "odds": {f"{a}-{b}": price for (a, b), price in sorted(nodes.items())}}
 
 
+def win_board(pool, race, captured):
+    """Return single-runner WIN prices when the full active field is available."""
+    if settled(pool):
+        return None
+    odds = {}
+    for node in pool.get("oddsNodes") or []:
+        runner = re.fullmatch(r"\d{1,2}", str(node.get("combString")).strip())
+        if not runner:
+            continue
+        try:
+            price = float(node.get("oddsValue"))
+        except (ValueError, TypeError):
+            continue
+        number = int(runner.group())
+        if number <= 0 or not math.isfinite(price) or price <= 0:
+            continue
+        key = str(number)
+        if key in odds:
+            return None
+        odds[key] = price
+    runners = set(map(int, odds))
+    expected = expected_runners(race)
+    if len(runners) < 2 or (expected and runners != expected):
+        return None
+    if not expected and str(race.get("wageringFieldSize", "")).isdigit() \
+            and len(runners) != int(race["wageringFieldSize"]):
+        return None
+    return {"observed_at": captured.isoformat(), "source_odds_at": pool.get("oddsLastUpdateTime"),
+            "sell_status": pool.get("sellStatus"), "pool_status": pool.get("status"),
+            "runners_on_board": sorted(runners), "odds": odds}
+
+
 def pool_open(pool):
     return upper(pool.get("sellStatus")) == "START_SELL" and not settled(pool)
 
@@ -236,8 +268,10 @@ class Recorder:
                     s["suspensions"].append({"from": s["close"].isoformat(), "to": captured.isoformat()})
                     s.pop("close")
                     s.pop("closed_board", None)
+                    s.pop("win_closed", None)
                     nxt = self.state.get(n + 1)
                     if nxt and "published" not in nxt:
+                        nxt.get("win_points", {}).pop("before_rollover", None)
                         if nxt["points"].pop("before_rollover", None):
                             nxt["superseded"].append({"point": "before_rollover", "reason": "previous race reopened"})
             if status not in RACE_OFF and status not in RACE_VOID:
@@ -327,7 +361,51 @@ class Recorder:
                     s["after_start_done"] = True
             if "after_start" in s["points"]:
                 s["after_start_done"] = True
+            self.observe_win(s, race, pools.get((n, "WIN"), {}), captured)
         return events
+
+    @staticmethod
+    def observe_win(s, race, pool, captured):
+        points = s.setdefault("win_points", {})
+        current = win_board(pool, race, captured)
+        if current and pool_open(pool):
+            s["win_last_open"] = current
+        elif current and upper(pool.get("sellStatus")) == "STOP_SELL" and s.get("close"):
+            s.setdefault("win_closed", current)
+        for name in OPEN_POINTS:
+            target = s["targets"][name]
+            previous = points.get(name)
+            if (previous and name in PRE_POST_MINUTES and target
+                    and previous["target_at"] != target.isoformat() and captured < target and not s.get("start")):
+                s.setdefault("win_superseded", []).append({"point": name, "snapshot": points.pop(name)})
+            if not (target and target <= captured <= target + WINDOW and name not in points):
+                continue
+            if name == "after_rollover" and captured >= s["targets"]["t5"]:
+                continue
+            if current and pool_open(pool):
+                points[name] = {**current, "target_at": target.isoformat(), "basis": "open_board"}
+                if name in s["anchors"]:
+                    points[name]["anchor"] = s["anchors"][name]
+
+        start = s.get("start")
+        if not start or "after_start" in points:
+            return
+        cutoff = s.get("close") or start
+        closed = s.get("win_closed")
+        if not closed and current and upper(pool.get("sellStatus")) == "STOP_SELL" and start <= captured <= start + WINDOW:
+            closed = current
+        if closed and cutoff <= stamp(closed["observed_at"]) <= start + WINDOW:
+            points["after_start"] = {**closed, "target_at": start.isoformat(),
+                                     "basis": "closed_board_after_stop_sell", "anchor": s["start_anchor"]}
+        elif captured > start + WINDOW:
+            last = s.get("win_last_open")
+            age = cutoff - stamp(last["observed_at"]) if last else None
+            if age is not None and timedelta(0) <= age <= FALLBACK_AGE:
+                points["after_start"] = {**last, "target_at": start.isoformat(),
+                                         "basis": "FALLBACK_last_open_board_before_stop_sell",
+                                         "fallback_age_seconds": round(age.total_seconds()),
+                                         "anchor": s["start_anchor"]}
+            s["win_after_start_done"] = True
 
     @staticmethod
     def targets(s, prev):
@@ -350,7 +428,8 @@ class Recorder:
             return False
         if s.get("late") or s.get("void"):
             return True
-        return bool(s.get("after_start_done"))
+        return bool(s.get("after_start_done") and (s.get("win_after_start_done")
+                    or s.get("win_points", {}).get("after_start")))
 
     def missing_reason(self, n, name, s, prev):
         if s.get("void"):
@@ -385,6 +464,8 @@ class Recorder:
                 a, b = prices[left], prices[right]
                 changes[f"{left}_to_{right}"] = round(100 * (a - b) / a, 2) if a and b else None
             rows.append({"combination": pair, "odds": prices, "drop_pct": changes})
+        win_points = {name: s.get("win_points", {}).get(name) for name in POINTS}
+        win_missing = {name: self.missing_reason(n, name, s, prev) for name in POINTS if not win_points[name]}
         iso = lambda t: t.isoformat() if isinstance(t, datetime) else None
         return {"schema": 2, "date": day, "venue": venue, "meeting_id": meeting_id, "race": n,
                 "post_time": iso(s.get("post")),
@@ -392,7 +473,9 @@ class Recorder:
                            "off_anchor": s.get("start_anchor"), "win_payout": iso(s.get("paid")),
                            "result": iso(s.get("finish")), "first_observed": iso(s.get("first_seen"))},
                 "target_times": {k: iso(t) for k, t in (s.get("targets") or {}).items()} | {"after_start": iso(s.get("start"))},
-                "points": points, "missing": missing, "superseded": s.get("superseded", []),
+                "points": points, "missing": missing,
+                "win_points": win_points, "win_missing": win_missing, "win_superseded": s.get("win_superseded", []),
+                "superseded": s.get("superseded", []),
                 "suspensions": s.get("suspensions", []), "combinations": rows}
 
 
@@ -592,7 +675,7 @@ def main():
                 if archive.put(path, record, f"Archive Quinella R{n}"):
                     recorder.state[n]["published"] = archive.run
                     got = [k for k in POINTS if record["points"][k]]
-                    log(f"Race {n} archived: {len(got)}/{len(POINTS)} points {got}; missing {record['missing'] or 'none'}")
+                    log(f"Race {n} archived: {len(got)}/{len(POINTS)} points {got}; missing {record['missing'] or 'none'}; WIN missing {record['win_missing'] or 'none'}")
         if all("published" in recorder.state.get(int(r["no"]), {}) for r in meeting["races"]):
             log("All races archived.")
             return
