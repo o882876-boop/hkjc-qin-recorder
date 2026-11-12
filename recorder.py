@@ -466,6 +466,14 @@ class Recorder:
             rows.append({"combination": pair, "odds": prices, "drop_pct": changes})
         win_points = {name: s.get("win_points", {}).get(name) for name in POINTS}
         win_missing = {name: self.missing_reason(n, name, s, prev) for name in POINTS if not win_points[name]}
+        win_rows = []
+        for runner in sorted(set().union(*(p["odds"] for p in win_points.values() if p)), key=int):
+            prices = {name: p["odds"].get(runner) if p else None for name, p in win_points.items()}
+            changes = {}
+            for left, right in CHANGE_INTERVALS:
+                a, b = prices[left], prices[right]
+                changes[f"{left}_to_{right}"] = round(100 * (a - b) / a, 2) if a and b else None
+            win_rows.append({"runner": runner, "odds": prices, "drop_pct": changes})
         iso = lambda t: t.isoformat() if isinstance(t, datetime) else None
         return {"schema": 2, "date": day, "venue": venue, "meeting_id": meeting_id, "race": n,
                 "post_time": iso(s.get("post")),
@@ -476,7 +484,7 @@ class Recorder:
                 "points": points, "missing": missing,
                 "win_points": win_points, "win_missing": win_missing, "win_superseded": s.get("win_superseded", []),
                 "superseded": s.get("superseded", []),
-                "suspensions": s.get("suspensions", []), "combinations": rows}
+                "suspensions": s.get("suspensions", []), "combinations": rows, "win_runners": win_rows}
 
 
 # ---- private archive (GitHub Contents API) ----

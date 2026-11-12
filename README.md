@@ -59,3 +59,5 @@ and a reason. Their boards are never relabelled.
 ## Win snapshots
 
 Each new race JSON includes `win_points` and `win_missing` at the same six targets as Quinella. Each WIN board is keyed by horse number and keeps its own HKJC price update time. Both pools are read in the same poll, with separate validation and cutoff fallback labels. Compare source update times when inferring which pool moved first. Older race records may have no WIN snapshots.
+
+`win_runners` gives each horse's own `drop_pct` across the same `CHANGE_INTERVALS` as the Quinella `combinations` rows (T-3 to T-2, T-2 to the final board, T-3 to final, etc.), so a WIN price drop is as easy to read as a Quinella one. Older race records have no `win_runners`.

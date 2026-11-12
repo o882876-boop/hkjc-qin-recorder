@@ -112,6 +112,11 @@ class SnapshotPoints(unittest.TestCase):
         self.assertIn("t3_to_t2", changes)
         self.assertIn("t2_to_after_start", changes)
         self.assertIn("t3_to_after_start", changes)
+        self.assertEqual(len(r2["win_runners"]), 12)
+        win_changes = r2["win_runners"][0]["drop_pct"]
+        self.assertIn("t3_to_t2", win_changes)
+        self.assertIn("t2_to_after_start", win_changes)
+        self.assertIn("t3_to_after_start", win_changes)
         self.assertTrue(post2 <= obs(r2, "after_start") <= post2 + rec.WINDOW)
         self.assertEqual(r2["points"]["after_start"]["basis"], "closed_board_after_stop_sell")
         self.assertEqual(r2["points"]["after_start"]["sell_status"], "STOP_SELL")
