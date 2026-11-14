@@ -35,6 +35,7 @@ CHANGE_INTERVALS = (*zip(POINTS, POINTS[1:]), ("t3", "after_start"))
 DBL_POINTS = (*PRE_POST_MINUTES, "after_start")
 DBL_CHANGES = (*zip(DBL_POINTS, DBL_POINTS[1:]), ("t3", "after_start"))
 DBL_LEAD = timedelta(minutes=6)             # only query the Double pool this long before a leg-1 post time
+DBL_MAX_DELAY = timedelta(minutes=20)       # keep watching a delayed leg-1 race this long after its post time
 # Status vocabulary taken from HKJC's own betting site code (bet.hkjc.com main bundle).
 RACE_OFF = {"CLOSED", "RESULT"}             # race no longer selling: off / finished
 RACE_RESULT = {"RESULT"}
@@ -243,6 +244,28 @@ def dbl_pools_by_race(meeting_id, pmpools):
                 and pool.get("id") == f"{meeting_id}DBL{legs[0]}":
             result[legs[0]] = pool
     return result
+
+
+def final_open(board, at, cutoff):
+    """The last board seen while the pool was still selling, and how long before the close it was taken.
+
+    The T-5/T-3/T-2 points follow the published post time, but HKJC often runs a race minutes late, so
+    this is the point that is always closest to the real off whatever the delay.
+    """
+    at = stamp(at) if isinstance(at, str) else at
+    if not board or not at:
+        return None
+    gap = round((cutoff - at).total_seconds()) if cutoff else None
+    return {**board, "seconds_before_close": gap}
+
+
+def add_final_open(rows, key, final, price_of):
+    """Attach the final open price and the drop from T-3 to every row (rows keep their old fields)."""
+    for row in rows:
+        price = price_of(final, row[key]) if final else None
+        t3 = row["odds"].get("t3")
+        row["final_open_odds"] = price
+        row["final_drop_pct_from_t3"] = round(100 * (t3 - price) / t3, 2) if t3 and price else None
 
 
 def pool_open(pool):
@@ -595,12 +618,20 @@ class Recorder:
         return events
 
     def dbl_wanted(self, at):
-        """True when a Double query is worthwhile: a leg-1 post time is near and its Double is not finished."""
+        """True when a Double query is worthwhile: a leg-1 race is near its off and its Double is unfinished.
+
+        HKJC often delays the off well past the published post time, so once the race is running the window
+        follows the observed off, not the post time.
+        """
         for n, s in self.state.items():
             d = s.get("dbl") or {}
-            post = s.get("post")
-            if post and n not in self.dbl_archived and not d.get("done") and not d.get("published") \
-                    and post - DBL_LEAD <= at <= post + WINDOW * 2:
+            post, start = s.get("post"), s.get("start")
+            if not post or n in self.dbl_archived or d.get("done") or d.get("published"):
+                continue
+            if s.get("late") and not start:     # already off when first seen: nothing live left to capture
+                continue
+            end = start + WINDOW * 2 if start else post + DBL_MAX_DELAY
+            if post - DBL_LEAD <= at <= end:
                 return True
         return False
 
@@ -631,12 +662,15 @@ class Recorder:
                 a, b = prices[left], prices[right]
                 changes[f"{left}_to_{right}"] = round(100 * (a - b) / a, 2) if a and b else None
             rows.append({"combination": pair, "odds": prices, "drop_pct": changes})
+        final = final_open(d.get("last_open"), d.get("last_open_at"), s.get("close") or s.get("start"))
+        add_final_open(rows, "combination", final, lambda f, k: f["odds"].get(k))
         iso = lambda t: t.isoformat() if isinstance(t, datetime) else None
         return {"schema": 1, "pool": "DBL", "date": day, "venue": venue, "meeting_id": meeting_id,
                 "leg1": n, "leg2": n + 1, "post_time": iso(s.get("post")),
                 "events": {"stop_sell": iso(s.get("close")), "off": iso(s.get("start")),
                            "off_anchor": s.get("start_anchor"), "first_observed": iso(s.get("first_seen"))},
-                "points": points, "missing": missing, "superseded": d["superseded"], "combinations": rows}
+                "points": points, "missing": missing, "final_open": final,
+                "superseded": d["superseded"], "combinations": rows}
 
     def record(self, n, day, venue, meeting_id):
         s = self.state[n]
@@ -653,6 +687,9 @@ class Recorder:
                 a, b = prices[left], prices[right]
                 changes[f"{left}_to_{right}"] = round(100 * (a - b) / a, 2) if a and b else None
             rows.append({"combination": pair, "odds": prices, "drop_pct": changes})
+        cutoff = s.get("close") or s.get("start")
+        final = final_open(s.get("last_open"), s.get("last_open_at"), cutoff)
+        add_final_open(rows, "combination", final, lambda f, k: f["odds"].get(k))
         win_points = {name: s.get("win_points", {}).get(name) for name in POINTS}
         win_missing = {name: self.missing_reason(n, name, s, prev) for name in POINTS if not win_points[name]}
         win_rows = []
@@ -663,6 +700,9 @@ class Recorder:
                 a, b = prices[left], prices[right]
                 changes[f"{left}_to_{right}"] = round(100 * (a - b) / a, 2) if a and b else None
             win_rows.append({"runner": runner, "odds": prices, "drop_pct": changes})
+        win_final = s.get("win_last_open")
+        win_final = final_open(win_final, win_final["observed_at"], cutoff) if win_final else None
+        add_final_open(win_rows, "runner", win_final, lambda f, k: f["odds"].get(k))
         iso = lambda t: t.isoformat() if isinstance(t, datetime) else None
         return {"schema": 2, "date": day, "venue": venue, "meeting_id": meeting_id, "race": n,
                 "post_time": iso(s.get("post")),
@@ -670,7 +710,7 @@ class Recorder:
                            "off_anchor": s.get("start_anchor"), "win_payout": iso(s.get("paid")),
                            "result": iso(s.get("finish")), "first_observed": iso(s.get("first_seen"))},
                 "target_times": {k: iso(t) for k, t in (s.get("targets") or {}).items()} | {"after_start": iso(s.get("start"))},
-                "points": points, "missing": missing,
+                "points": points, "missing": missing, "final_open": final, "win_final_open": win_final,
                 "win_points": win_points, "win_missing": win_missing, "win_superseded": s.get("win_superseded", []),
                 "superseded": s.get("superseded", []),
                 "suspensions": s.get("suspensions", []), "combinations": rows, "win_runners": win_rows}

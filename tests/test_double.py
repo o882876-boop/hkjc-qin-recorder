@@ -84,6 +84,55 @@ class DoubleRecording(unittest.TestCase):
         self.assertFalse([c for c in record["combinations"] if c["combination"].startswith("3-")])
         self.assertEqual(record["points"]["t3"]["field_check"], "matches_declared_runners")
 
+    def test_delayed_off_still_gets_after_start_and_is_archived_promptly(self):
+        """R4 on 2026-11-14 was posted for 14:25 but went off at 14:29:57; polling used to stop at post+70s."""
+        races = base.card(3, {1: {"delay": 5}})
+        recorder, t, done_at = rec.Recorder(), P1 - M(45), None
+        while t <= P1 + M(12):
+            meeting, pools = base.meeting_at(races, t)
+            recorder.observe(meeting, pools, t)
+            if recorder.dbl_wanted(t):          # the production loop only queries while this is true
+                recorder.observe_dbl(meeting, dbl_pools(races, t), t)
+            if done_at is None and recorder.state[1].get("dbl", {}).get("done"):
+                done_at = t
+            t += timedelta(seconds=8)
+        record = recorder.dbl_record(1, DAY, "HV", MID)
+        self.assertEqual(record["missing"], {})
+        self.assertEqual(record["points"]["after_start"]["basis"], "closed_board_after_stop_sell")
+        self.assertTrue(P1 + M(5) <= done_at <= P1 + M(5) + rec.WINDOW * 2, "archived right after the delayed off")
+
+    def test_final_open_is_the_last_open_board_even_when_the_off_is_late(self):
+        races = base.card(3, {1: {"delay": 5}})
+        _, pub = base.simulate(races, P1 - M(45), P1 + M(12))
+        qin = pub[1][1]
+        dbl = simulate_dbl(races, P1 - M(45), P1 + M(12)).dbl_record(1, DAY, "HV", MID)
+        for name, record in (("QIN", qin), ("DBL", dbl)):
+            final = record["final_open"]
+            self.assertIsNotNone(final, name)
+            self.assertEqual(final["sell_status"], "START_SELL", name)
+            self.assertTrue(rec.stamp(record["points"]["t2"]["observed_at"]) < rec.stamp(final["observed_at"]), name)
+            self.assertTrue(P1 + M(4) <= rec.stamp(final["observed_at"]) <= P1 + M(5), name)   # just before the real close
+            self.assertTrue(0 <= final["seconds_before_close"] <= 10, name)
+            row = record["combinations"][0]
+            self.assertEqual(row["final_open_odds"], final["odds"][row["combination"]], name)
+            self.assertIsNotNone(row["final_drop_pct_from_t3"], name)
+        self.assertEqual(qin["win_final_open"]["sell_status"], "START_SELL")
+        self.assertIsNotNone(qin["win_runners"][0]["final_open_odds"])
+        json.dumps(qin), json.dumps(dbl)
+
+    def test_final_open_survives_hand_over(self):
+        recorder = simulate_dbl(base.card(3), P1 - M(45), P1 - M(1))
+        again = rec.Recorder.load(json.loads(json.dumps(recorder.dump())))
+        self.assertEqual(again.state[1]["last_open_at"], recorder.state[1]["last_open_at"])
+        self.assertEqual(again.state[1]["dbl"]["last_open_at"], recorder.state[1]["dbl"]["last_open_at"])
+
+    def test_polling_stops_after_the_off_and_skips_races_already_off(self):
+        recorder = simulate_dbl(base.card(3), P1 - M(45), P1 + M(2))
+        self.assertTrue(recorder.state[1]["dbl"]["done"] or not recorder.dbl_wanted(P1 + M(3)))
+        self.assertFalse(recorder.dbl_wanted(P1 + M(3)))
+        late = simulate_dbl(base.card(3), P1 + M(2), P1 + M(40))
+        self.assertFalse(late.dbl_wanted(P1 + M(10)))
+
     def test_banker_partner_layout_gives_the_same_board(self):
         flat = simulate_dbl(base.card(3), P1 - M(45), P1 + M(5)).dbl_record(1, DAY, "HV", MID)
         nested = simulate_dbl(base.card(3), P1 - M(45), P1 + M(5), nested=True).dbl_record(1, DAY, "HV", MID)
