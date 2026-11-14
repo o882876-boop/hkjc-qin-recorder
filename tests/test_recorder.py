@@ -241,13 +241,16 @@ class FakeArchive:
 
 
 class MainLoop(unittest.TestCase):
+    dbl_source = staticmethod(lambda races, t: [])     # Double pools served by the fake source
+
     def run_main(self, races, start, run_id, limit=None):
         clock = {"t": start}
         rec.now = lambda: clock["t"]
         rec.time.sleep = lambda s: clock.__setitem__("t", clock["t"] + timedelta(seconds=s))
         rec.time.monotonic = lambda: clock["t"].timestamp()
         rec.calendar = lambda day: [meeting_at(races, clock["t"])[0]]
-        rec.odds_pools = lambda day, venue: [{"pmPools": meeting_at(races, clock["t"])[1]}]
+        rec.odds_pools = lambda day, venue, kinds=("QIN", "WIN"): [{"pmPools": (
+            self.dbl_source(races, clock["t"]) if tuple(kinds) == ("DBL",) else meeting_at(races, clock["t"])[1])}]
         rec.Archive = FakeArchive
         os.environ.update(GITHUB_RUN_ID=run_id, PRIVATE_DATA_REPO="x/y", PRIVATE_DATA_TOKEN="z")
         if limit:
@@ -265,7 +268,7 @@ class MainLoop(unittest.TestCase):
          rec.SOFT_HANDOFF, rec.HARD_HANDOFF) = self.saved
 
     def races(self):
-        return sorted(p for p in FakeArchive.files if "/race-" in p)
+        return sorted(p for p in FakeArchive.files if p.startswith("qin-history/") and "/race-" in p)
 
     def test_full_meeting_then_queued_run_exits_without_duplicates(self):
         races = card(9)

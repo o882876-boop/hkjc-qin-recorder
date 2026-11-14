@@ -30,6 +30,11 @@ PRE_POST_MINUTES = {"t5": 5, "t3": 3, "t2": 2}
 OPEN_POINTS = ("before_rollover", "after_rollover", *PRE_POST_MINUTES)
 POINTS = (*OPEN_POINTS, "after_start")
 CHANGE_INTERVALS = (*zip(POINTS, POINTS[1:]), ("t3", "after_start"))
+# Double (DBL, 孖寶) pairs race N (leg 1) with race N+1 (leg 2) and closes at race N's off, so every
+# point is anchored to race N. No rollover points: they only make sense for a pool that opens after a race.
+DBL_POINTS = (*PRE_POST_MINUTES, "after_start")
+DBL_CHANGES = (*zip(DBL_POINTS, DBL_POINTS[1:]), ("t3", "after_start"))
+DBL_LEAD = timedelta(minutes=6)             # only query the Double pool this long before a leg-1 post time
 # Status vocabulary taken from HKJC's own betting site code (bet.hkjc.com main bundle).
 RACE_OFF = {"CLOSED", "RESULT"}             # race no longer selling: off / finished
 RACE_RESULT = {"RESULT"}
@@ -100,9 +105,9 @@ def calendar(day):
             and str(m.get("id", "")).startswith("MTG_" + day.replace("-", "") + "_")]
 
 
-def odds_pools(day, venue):
+def odds_pools(day, venue, kinds=("QIN", "WIN")):
     return hkjc(QUERY, {"date": day, "venueCode": venue, "raceNo": None,
-                        "oddsTypes": ["QIN", "WIN"]})["raceMeetings"] or []
+                        "oddsTypes": list(kinds)})["raceMeetings"] or []
 
 
 def expected_runners(race):
@@ -179,6 +184,67 @@ def win_board(pool, race, captured):
             "runners_on_board": sorted(runners), "odds": odds}
 
 
+def dbl_board(pool, race1, race2, captured):
+    """A complete Double board (leg-1 horse, leg-2 horse), or None. Order is never inferred or sorted."""
+    def numbers(text):
+        text = str(text)
+        return [int(x) for x in re.findall(r"\d+", text)] if re.fullmatch(r"\d{1,2}(?:\s*[-,+/]\s*\d{1,2})?", text.strip()) else []
+
+    nodes = {}
+
+    def add(pair, value):
+        """False when the notation is ambiguous or duplicated; scratched/capped quotes are skipped."""
+        if len(pair) != 2 or pair[0] <= 0 or pair[1] <= 0 or tuple(pair) in nodes:
+            return False
+        try:
+            price = float(value)
+        except (ValueError, TypeError):
+            return True
+        if math.isfinite(price) and price > 0:
+            nodes[tuple(pair)] = price
+        return True
+
+    for node in pool.get("oddsNodes") or []:
+        first = numbers(node.get("combString", ""))
+        if node.get("bankerOdds"):           # banker (leg 1) / partner (leg 2) grid
+            if len(first) != 1:
+                return None
+            for child in node["bankerOdds"]:
+                second = numbers(child.get("combString", ""))
+                pair = first + second if len(second) == 1 else second
+                if len(pair) != 2 or pair[0] != first[0] or not add(pair, child.get("oddsValue")):
+                    return None
+        elif not add(first, node.get("oddsValue")):
+            return None
+    leg1 = sorted({a for a, _ in nodes})
+    leg2 = sorted({b for _, b in nodes})
+    if not leg1 or not leg2 or len(nodes) != len(leg1) * len(leg2):
+        return None
+    expected1, expected2 = expected_runners(race1), expected_runners(race2)
+    matches = (not expected1 or set(leg1) == expected1) and (not expected2 or set(leg2) == expected2)
+    return {"observed_at": captured.isoformat(), "source_odds_at": pool.get("oddsLastUpdateTime"),
+            "sell_status": pool.get("sellStatus"), "pool_status": pool.get("status"),
+            "leg1_runners": leg1, "leg2_runners": leg2,
+            "field_check": "matches_declared_runners" if matches
+            else f"declared_leg1={sorted(expected1)} declared_leg2={sorted(expected2)}",
+            "odds": {f"{a}-{b}": price for (a, b), price in sorted(nodes.items())}}
+
+
+def dbl_pools_by_race(meeting_id, pmpools):
+    """{leg-1 race number: Double pool} for pools whose identity and legs both match."""
+    result = {}
+    for pool in pmpools or []:
+        legs = (pool.get("leg") or {}).get("races") or []
+        try:
+            legs = [int(x) for x in legs]
+        except (TypeError, ValueError):
+            continue
+        if pool.get("oddsType") == "DBL" and len(legs) == 2 and legs[1] == legs[0] + 1 \
+                and pool.get("id") == f"{meeting_id}DBL{legs[0]}":
+            result[legs[0]] = pool
+    return result
+
+
 def pool_open(pool):
     return upper(pool.get("sellStatus")) == "START_SELL" and not settled(pool)
 
@@ -204,6 +270,7 @@ def pools_by_race(meeting_id, pmpools):
 class Recorder:
     def __init__(self, state=None):
         self.state = state or {}
+        self.dbl_archived = set()           # leg-1 races whose Double record is already stored
 
     # ---- persistence for hand-over between runs ----
     def dump(self):
@@ -449,6 +516,128 @@ class Recorder:
             return "collides_with_t5"
         return "no_valid_open_board_within_35s_of_target"
 
+    # ---- Double (孖寶): additive, never touches the Quinella/WIN state machine ----
+    def observe_dbl(self, meeting, pmpools, captured):
+        """Capture Double boards for leg-1 race N at T-5/T-3/T-2 and at its off. Returns log messages."""
+        events = []
+        pools = dbl_pools_by_race(meeting["id"], pmpools)
+        races = {int(r["no"]): r for r in meeting["races"]}
+        for n, race in sorted(races.items()):
+            s = self.state.get(n)
+            if s is None or not s.get("post"):
+                continue
+            d = s.setdefault("dbl", {"points": {}, "superseded": []})
+            if n in self.dbl_archived or d.get("done") or d.get("published"):
+                continue
+            nxt = races.get(n + 1)
+            status = upper(race.get("status"))
+            if nxt is None:
+                d.update(done=True, published="n/a", none="last_race_has_no_double")
+                continue
+            if status in RACE_VOID or s.get("void"):
+                d.update(done=True, none=f"race {(s.get('void') or status).lower()}")
+                continue
+            pool = pools.get(n)
+            if pool is None:
+                if s.get("start") and captured > s["start"] + WINDOW:
+                    d.update(done=True, none="no_double_pool_published")
+                continue
+            is_open = pool_open(pool)
+            current = dbl_board(pool, race, nxt, captured)
+            post = s["post"]
+            if is_open:
+                d["seen_open"] = True
+                d.pop("closed_board", None)
+                if current:
+                    d["last_open"], d["last_open_at"] = current, captured.isoformat()
+            elif current and d.get("seen_open") and "closed_board" not in d and captured >= post - EARLY_STOP:
+                d["closed_board"] = current
+            if "late" not in d:
+                d["late"] = not is_open and captured >= post - EARLY_STOP and not d.get("seen_open")
+                if d["late"]:
+                    events.append(f"R{n} DBL already closed when first observed")
+            for name, minutes in PRE_POST_MINUTES.items():
+                target = post - timedelta(minutes=minutes)
+                point = d["points"].get(name)
+                if point and point["target_at"] != target.isoformat() and captured < target and not s.get("start"):
+                    d["superseded"].append({"point": name, "reason": "post time changed", "snapshot": point})
+                    d["points"].pop(name)
+                if name in d["points"] or not target <= captured <= target + WINDOW:
+                    continue
+                if current and is_open:
+                    d["points"][name] = {**current, "target_at": target.isoformat(), "basis": "open_board"}
+                    events.append(f"R{n} DBL {name} captured (source odds {current['source_odds_at']})")
+            start = s.get("start")
+            if start and "after_start" not in d["points"]:
+                closed = d.get("closed_board")
+                if closed and stamp(closed["observed_at"]) <= start + WINDOW:
+                    d["points"]["after_start"] = {**closed, "target_at": start.isoformat(),
+                                                  "basis": "closed_board_after_stop_sell", "anchor": s.get("start_anchor")}
+                    events.append(f"R{n} DBL after_start captured")
+                elif start <= captured <= start + WINDOW and current and not is_open:
+                    d["points"]["after_start"] = {**current, "target_at": start.isoformat(),
+                                                  "basis": "closed_board_after_off", "anchor": s.get("start_anchor")}
+                    events.append(f"R{n} DBL after_start captured")
+                elif captured > start + WINDOW:
+                    cutoff = s.get("close") or start
+                    last, at = d.get("last_open"), stamp(d.get("last_open_at"))
+                    if last and at and timedelta(0) <= cutoff - at <= FALLBACK_AGE:
+                        d["points"]["after_start"] = {**last, "target_at": start.isoformat(),
+                                                      "basis": "FALLBACK_last_open_board_before_stop_sell",
+                                                      "fallback_age_seconds": round((cutoff - at).total_seconds()),
+                                                      "anchor": s.get("start_anchor")}
+                        events.append(f"R{n} DBL after_start used FALLBACK last open board")
+                    d["done"] = True
+            if "after_start" in d["points"]:
+                d["done"] = True
+            if captured > post + timedelta(minutes=40):
+                d["done"] = True
+        return events
+
+    def dbl_wanted(self, at):
+        """True when a Double query is worthwhile: a leg-1 post time is near and its Double is not finished."""
+        for n, s in self.state.items():
+            d = s.get("dbl") or {}
+            post = s.get("post")
+            if post and n not in self.dbl_archived and not d.get("done") and not d.get("published") \
+                    and post - DBL_LEAD <= at <= post + WINDOW * 2:
+                return True
+        return False
+
+    def dbl_record(self, n, day, venue, meeting_id):
+        s = self.state[n]
+        d = s["dbl"]
+        points = {name: d["points"].get(name) for name in DBL_POINTS}
+        missing = {}
+        for name in DBL_POINTS:
+            if points[name]:
+                continue
+            if d.get("none"):
+                missing[name] = d["none"]
+            elif d.get("late"):
+                missing[name] = "recorder_not_running_before_race_off"
+            elif name == "after_start":
+                missing[name] = "no_closed_board_after_off_and_no_recent_open_board" if s.get("start") else "off_not_observed"
+            elif s["first_seen"] > s["post"] - timedelta(minutes=PRE_POST_MINUTES[name]) + WINDOW:
+                missing[name] = "recorder_not_running_at_target"
+            else:
+                missing[name] = "no_valid_open_board_within_35s_of_target"
+        rows = []
+        for pair in sorted(set().union(*(p["odds"] for p in points.values() if p)),
+                           key=lambda c: tuple(map(int, c.split("-")))):
+            prices = {name: p["odds"].get(pair) if p else None for name, p in points.items()}
+            changes = {}
+            for left, right in DBL_CHANGES:
+                a, b = prices[left], prices[right]
+                changes[f"{left}_to_{right}"] = round(100 * (a - b) / a, 2) if a and b else None
+            rows.append({"combination": pair, "odds": prices, "drop_pct": changes})
+        iso = lambda t: t.isoformat() if isinstance(t, datetime) else None
+        return {"schema": 1, "pool": "DBL", "date": day, "venue": venue, "meeting_id": meeting_id,
+                "leg1": n, "leg2": n + 1, "post_time": iso(s.get("post")),
+                "events": {"stop_sell": iso(s.get("close")), "off": iso(s.get("start")),
+                           "off_anchor": s.get("start_anchor"), "first_observed": iso(s.get("first_seen"))},
+                "points": points, "missing": missing, "superseded": d["superseded"], "combinations": rows}
+
     def record(self, n, day, venue, meeting_id):
         s = self.state[n]
         ordered = sorted(self.state)
@@ -545,6 +734,38 @@ def race_folder(day, venue):
     return f"qin-history/{day}_{venue}"
 
 
+def dbl_folder(day, venue):
+    return f"dbl-history/{day}_{venue}"
+
+
+def archived_dbl(archive, day, venue):
+    races = set()
+    for name in archive.listing(dbl_folder(day, venue)):
+        match = re.fullmatch(r"race-(\d{2})-.+\.json", name)
+        if match:
+            races.add(int(match.group(1)))
+    return races
+
+
+def publish_dbl(recorder, archive, day, venue, meeting_id):
+    """Store every finished Double record. A failure here never affects the Quinella recording."""
+    for n in sorted(recorder.state):
+        d = recorder.state[n].get("dbl") or {}
+        if not d.get("done") or d.get("published") or n in recorder.dbl_archived:
+            continue
+        try:
+            record = recorder.dbl_record(n, day, venue, meeting_id)
+            path = f"{dbl_folder(day, venue)}/race-{n:02}-{archive.run}.json"
+            if archive.put(path, record, f"Archive Double R{n}-R{n + 1}"):
+                d["published"] = archive.run
+                got = [k for k in DBL_POINTS if record["points"][k]]
+                log(f"Double R{n}-R{n + 1} archived: {len(got)}/{len(DBL_POINTS)} points {got}; missing {record['missing'] or 'none'}")
+        except SystemExit:
+            raise
+        except Exception as error:
+            log(f"Double R{n} record could not be stored ({type(error).__name__}); will retry")
+
+
 def archived_races(archive, day, venue):
     races = set()
     for name in archive.listing(race_folder(day, venue)):
@@ -639,6 +860,10 @@ def main():
         print("All races already archived.")
         return
     recorder = Recorder.load(handoff["state"]) if handoff else Recorder()
+    try:
+        recorder.dbl_archived = archived_dbl(archive, day, venue)
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        log(f"Could not list archived Doubles ({type(error).__name__}); continuing")
     if handoff:
         log("Resumed hand-over state from the previous run.")
     for n in done:
@@ -668,6 +893,15 @@ def main():
             if now() - started > HARD_HANDOFF:
                 break
             continue
+        if recorder.dbl_wanted(captured):
+            try:                              # isolated: a Double failure must never disturb the Quinella loop
+                dbl = odds_pools(day, venue, ("DBL",))
+                if len(dbl) == 1:
+                    for message in recorder.observe_dbl(meeting, dbl[0]["pmPools"], now()):
+                        log(message)
+            except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+                log(f"HKJC Double poll failed ({type(error).__name__}: {str(error)[:80]})")
+        publish_dbl(recorder, archive, day, venue, meeting_id)
         last_post = max(s["post"] for s in recorder.state.values() if s.get("post"))
         if not healthy and any(s.get("board") for s in recorder.state.values()):
             healthy = True
@@ -685,6 +919,7 @@ def main():
                     got = [k for k in POINTS if record["points"][k]]
                     log(f"Race {n} archived: {len(got)}/{len(POINTS)} points {got}; missing {record['missing'] or 'none'}; WIN missing {record['win_missing'] or 'none'}")
         if all("published" in recorder.state.get(int(r["no"]), {}) for r in meeting["races"]):
+            publish_dbl(recorder, archive, day, venue, meeting_id)
             log("All races archived.")
             return
         elapsed = now() - started
@@ -700,6 +935,7 @@ def main():
                                    f"Archive Quinella R{n} (incomplete)"):
                         s["published"] = archive.run
                         log(f"Race {n} archived incomplete; missing {record['missing']}")
+            publish_dbl(recorder, archive, day, venue, meeting_id)
             raise SystemExit("Meeting window ended before every race completed.")
         pause(recorder, time.monotonic() - tick)
     state = {"saved_at": now().isoformat(), "meeting_id": meeting_id, "state": recorder.dump()}
@@ -789,6 +1025,17 @@ def source_check():
         print(f"  R{n}: post {race.get('postTime', '')[11:16]} race={race.get('status')} "
               f"QIN={'missing' if not qin else qin.get('sellStatus')} "
               f"board={'complete ' + str(len(result['odds'])) + ' combinations, ' + result['field_check'] if result else 'NOT COMPLETE'}")
+    # Double (孖寶) is informational: it never fails the check, it only shows what HKJC publishes now.
+    try:
+        dbl = dbl_pools_by_race(meeting["id"], odds_pools(meeting["date"], meeting["venueCode"], ("DBL",))[0]["pmPools"])
+        races = {int(r["no"]): r for r in meeting["races"]}
+        for n in sorted(races):
+            pool = dbl.get(n)
+            result = dbl_board(pool, races[n], races[n + 1], now()) if pool and n + 1 in races else None
+            print(f"  R{n}-R{n + 1}: DBL={'missing' if not pool else pool.get('sellStatus')} "
+                  f"board={'complete ' + str(len(result['odds'])) + ' combinations, ' + result['field_check'] if result else 'NOT COMPLETE'}")
+    except (OSError, ValueError, KeyError, TypeError, IndexError) as error:
+        print(f"  DBL check could not run ({type(error).__name__}: {str(error)[:80]})")
     if bad:
         raise SystemExit(f"{bad} race(s) without a complete Quinella board.")
 

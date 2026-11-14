@@ -61,3 +61,19 @@ and a reason. Their boards are never relabelled.
 Each new race JSON includes `win_points` and `win_missing` at the same six targets as Quinella. Each WIN board is keyed by horse number and keeps its own HKJC price update time. Both pools are read in the same poll, with separate validation and cutoff fallback labels. Compare source update times when inferring which pool moved first. Older race records may have no WIN snapshots.
 
 `win_runners` gives each horse's own `drop_pct` across the same `CHANGE_INTERVALS` as the Quinella `combinations` rows (T-3 to T-2, T-2 to the final board, T-3 to final, etc.), so a WIN price drop is as easy to read as a Quinella one. Older race records have no `win_runners`.
+
+## Double (孖寶)
+
+The recorder also captures the Double pool, which pairs race N (leg 1) with race N+1 (leg 2) and closes at
+race N's off. For every race N that has a following race it stores four boards, all anchored to race N:
+`t5`, `t3`, `t2` (5/3/2 minutes before its post time) and `after_start` (first closed board at its off, with the
+same labelled `FALLBACK_` rule as Quinella). There are no rollover points. The last race has no Double.
+
+Combinations are **ordered** (`"3-7"` = horse 3 in race N, horse 7 in race N+1; `"7-3"` is a different bet) and a
+board is only kept when the full leg-1 x leg-2 grid is present. Files:
+`odds-data:dbl-history/YYYY-MM-DD_VENUE/race-NN-RUN.json` (`NN` = leg-1 race, schema 1). `drop_pct` has
+`t5_to_t3`, `t3_to_t2`, `t2_to_after_start` and `t3_to_after_start`.
+
+The Double query only runs from 6 minutes before a post time and is isolated from the Quinella loop: if HKJC
+rejects or fails it, Quinella and WIN recording carry on unchanged. `source_test` now also lists the Double
+pools (informational, it never fails the check).
