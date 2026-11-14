@@ -69,6 +69,39 @@ class Prediction(unittest.TestCase):
         self.assertIsNone(rec.predict_outcome(None, s["points"], {}))
 
 
+class PredictionAtT3(unittest.TestCase):
+    EARLY = {"1": 20, "2": 18, "3": 8, "4": 0, "5": 0, "6": -4, "7": -8, "8": 12}     # t5 -> t3
+    LATER = {"1": 15, "2": 10, "3": 0, "4": 0, "5": 40, "6": 0, "7": 0, "8": 0}         # t3 -> after_start: 5 surges, 8 stops
+
+    def make(self):
+        flat = {h: 0.0 for h in HORSES}
+        total = {h: self.EARLY[h] + self.LATER[h] for h in HORSES}
+        pts = {"t5": board(flat), "t3": board(self.EARLY), "after_start": board(total)}
+        pts["t3"]["observed_at"] = "2026-11-11T18:37:00+08:00"
+        wpts = {"t5": win(flat), "t3": win(self.EARLY), "after_start": win(total)}
+        return {"points": pts, "win_points": wpts}
+
+    def test_t3_prediction_uses_t5_to_t3_and_is_checked_from_t3(self):
+        s = self.make()
+        pred = rec.predict_at(s, "t3")
+        self.assertEqual((pred["at_point"], pred["reference_point"], pred["top"]), ("t3", "t5", ["1", "2", "8"]))
+        self.assertIn("qin_drop_pct_ref_to_t3", pred["horses"][0])
+        self.assertIn("win_odds_t3", pred["horses"][0])
+        out = rec.predict_outcome(pred, s["points"], s["win_points"])
+        self.assertIn("qin_drop_pct_t3_to_after_start", out)
+        self.assertIn("5", out["qin_actual_top"])                            # the surge nobody predicted
+        self.assertNotIn("8", out["qin_actual_top"])                         # a predicted horse that stopped shortening
+        self.assertEqual(out["qin_top_hits"], 2)
+        json.dumps(pred), json.dumps(out)
+
+    def test_t3_needs_t5_and_never_falls_back_to_t2(self):
+        s = self.make()
+        s["points"]["t5"] = None
+        self.assertEqual(rec.predict_at(s, "t3")["error"], "need_t3_and_an_earlier_board")
+        s["points"]["t2"] = s["points"]["t3"]
+        self.assertEqual(rec.predict_at(s, "t3")["error"], "need_t3_and_an_earlier_board")
+
+
 class PredictionInMainLoop(unittest.TestCase):
     run_main, setUp, tearDown = base.MainLoop.run_main, base.MainLoop.setUp, base.MainLoop.tearDown
     dbl_source = staticmethod(lambda races, t: [])
@@ -76,28 +109,32 @@ class PredictionInMainLoop(unittest.TestCase):
     def files(self, prefix):
         return sorted(p for p in base.FakeArchive.files if p.startswith(prefix))
 
-    def test_each_race_gets_one_prediction_file_written_at_t2_and_repeated_in_its_record(self):
+    def test_each_race_gets_a_t3_and_a_t2_prediction_file_written_in_time_and_repeated_in_its_record(self):
         self.run_main(base.card(3), P1 - M(45), "500")
-        paths = self.files("predictions/")
-        self.assertEqual([p.rsplit("/", 1)[1] for p in paths], [f"race-0{i}-500-1.json" for i in (1, 2, 3)])
-        for path in paths:
-            body = json.loads(base.FakeArchive.files[path])
-            self.assertEqual(body["prediction"]["model"], "momentum_v1")
-            self.assertEqual(len(body["prediction"]["top"]), 3)
-            record = json.loads(base.FakeArchive.files[path.replace("predictions/", "qin-history/")])
-            self.assertEqual(record["t2_prediction"], body["prediction"])
-            self.assertIn("qin_top_hits", record["t2_prediction_outcome"])
-            written = rec.stamp(body["written_at"]); post = rec.stamp(body["post_time"])
-            self.assertLess(written, post, "available before the race, not after")
-            self.assertGreaterEqual(written, post - M(2))
+        names = [p.rsplit("/", 1)[1] for p in self.files("predictions/")]
+        self.assertEqual(names, sorted(f"race-0{i}-{pt}-500-1.json" for i in (1, 2, 3) for pt in ("t2", "t3")))
+        for point, early, late in (("t3", 4, 2), ("t2", 3, 1)):
+            for i in (1, 2, 3):
+                path = f"predictions/2026-11-11_HV/race-0{i}-{point}-500-1.json"
+                body = json.loads(base.FakeArchive.files[path])
+                self.assertEqual(body["point"], point)
+                self.assertEqual(body["prediction"]["at_point"], point)
+                self.assertEqual(len(body["prediction"]["top"]), 3)
+                record = json.loads(base.FakeArchive.files[path.replace("predictions/", "qin-history/").replace(f"-{point}-", "-")])
+                self.assertEqual(record[f"{point}_prediction"], body["prediction"])
+                self.assertIn("qin_top_hits", record[f"{point}_prediction_outcome"])
+                written, post = rec.stamp(body["written_at"]), rec.stamp(body["post_time"])
+                self.assertLess(written, post, "available before the race, not after")
+                self.assertGreaterEqual(written, post - M(early))
+                self.assertLessEqual(written, post - M(late) + M(1))
 
     def test_a_prediction_bug_never_blocks_the_quinella_records(self):
-        saved = rec.predict_t2
-        rec.predict_t2 = lambda *a, **k: (_ for _ in ()).throw(ZeroDivisionError("boom"))
+        saved = rec.predict_at
+        rec.predict_at = lambda *a, **k: (_ for _ in ()).throw(ZeroDivisionError("boom"))
         try:
             self.run_main(base.card(3), P1 - M(45), "501")
         finally:
-            rec.predict_t2 = saved
+            rec.predict_at = saved
         self.assertEqual(len(self.files("qin-history/")), 3)
         body = json.loads(base.FakeArchive.files[self.files("predictions/")[0]])
         self.assertEqual(body["prediction"]["error"], "ZeroDivisionError")
@@ -114,10 +151,11 @@ class PredictionInMainLoop(unittest.TestCase):
             recorder.observe(meeting, pools, t)
             t += base.timedelta(seconds=8)
         due = recorder.make_predictions(t)
-        self.assertEqual(due, [1])
-        recorder.state[1]["t2_prediction_published"] = True
+        self.assertEqual(due, [(1, "t3"), (1, "t2")])
+        recorder.state[1]["t3_prediction_published"] = recorder.state[1]["t2_prediction_published"] = True
         again = rec.Recorder.load(json.loads(json.dumps(recorder.dump())))
         self.assertEqual(again.make_predictions(t), [])
+        self.assertEqual(again.state[1]["t3_prediction"], recorder.state[1]["t3_prediction"])
         self.assertEqual(again.state[1]["t2_prediction"], recorder.state[1]["t2_prediction"])
 
 

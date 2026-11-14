@@ -362,46 +362,57 @@ def zscores(values, keys):
     return {k: (values[k] - mean) / sd for k in keys}
 
 
-def predict_t2(s, use_win=True):
-    """Rank horses by how strongly their price was already shortening up to t2 (Quinella + WIN momentum).
+PREDICT_POINTS = {"t3": ("t5",), "t2": ("t5", "t3")}      # prediction point -> earlier boards usable as the reference
 
-    Back-test, 2026-11-14 Sha Tin, 7 races: the horses that had shortened most before t2 tended to keep shortening
-    (rank correlation about +0.4; 9-11 of the 21 top-3 picks against about 4.6 by chance). Exploratory, one meeting.
+
+def predict_at(s, point, use_win=True):
+    """Rank horses by how strongly their price was already shortening up to `point` (t3 or t2).
+
+    Momentum: mean Quinella-combination drop and WIN drop from an earlier board to `point`, z-scored and added.
+    Back-tests (Sha Tin 2026-11-14 and Happy Valley 2026-11-11): the horses that had shortened most tended to keep
+    shortening until the close. t5->t3 over 15 races: rank correlation +0.30, 14 of 15 races positive, 17 of 45 top-3
+    picks against about 10.7 by chance; t2 over 7 races: +0.4, 11 of 21 against about 4.6. Exploratory, two meetings.
     """
     pts, wpts = s.get("points") or {}, s.get("win_points") or {}
-    ref = next((r for r in ("t5", "t3") if pts.get(r)), None)
-    if not ref or not pts.get("t2"):
-        return {"model": PREDICT_MODEL, "error": "need_t2_and_an_earlier_board"}
-    q = qin_horse_drops(pts[ref], pts["t2"])
-    w = win_horse_drops(wpts.get(ref), wpts.get("t2")) if use_win else {}
+    ref = next((r for r in PREDICT_POINTS[point] if pts.get(r)), None)
+    if not ref or not pts.get(point):
+        return {"model": PREDICT_MODEL, "at_point": point, "error": f"need_{point}_and_an_earlier_board"}
+    q = qin_horse_drops(pts[ref], pts[point])
+    w = win_horse_drops(wpts.get(ref), wpts.get(point)) if use_win else {}
     horses = sorted((h for h in q if (h in w or not w)), key=int)
     if len(horses) < 4:
-        return {"model": PREDICT_MODEL, "error": "too_few_comparable_horses"}
+        return {"model": PREDICT_MODEL, "at_point": point, "error": "too_few_comparable_horses"}
     zq = zscores(q, horses)
     zw = zscores(w, horses) if w else {h: 0.0 for h in horses}
     score = {h: zq[h] + zw[h] for h in horses}
     order = sorted(horses, key=lambda h: -score[h])
-    win_t2 = (wpts.get("t2") or {}).get("odds", {})
-    return {"model": PREDICT_MODEL, "reference_point": ref, "inputs": ["QIN", "WIN"] if w else ["QIN"],
-            "made_at": pts["t2"]["observed_at"], "t2_target_at": pts["t2"].get("target_at"),
-            "note": "t2 follows the published post time; if the race runs late this predicts the move over a longer period",
+    win_odds = (wpts.get(point) or {}).get("odds", {})
+    return {"model": PREDICT_MODEL, "at_point": point, "reference_point": ref,
+            "inputs": ["QIN", "WIN"] if w else ["QIN"],
+            "made_at": pts[point]["observed_at"], "target_at": pts[point].get("target_at"),
+            "note": f"{point} follows the published post time; if the race runs late this predicts the move over a longer period",
             "top": order[:PREDICT_TOP],
-            "horses": [{"horse": h, "score": round(score[h], 3), "qin_drop_pct_ref_to_t2": round(q[h], 2),
-                        "win_drop_pct_ref_to_t2": round(w[h], 2) if h in w else None,
-                        "win_odds_t2": win_t2.get(h)} for h in order]}
+            "horses": [{"horse": h, "score": round(score[h], 3), f"qin_drop_pct_ref_to_{point}": round(q[h], 2),
+                        f"win_drop_pct_ref_to_{point}": round(w[h], 2) if h in w else None,
+                        f"win_odds_{point}": win_odds.get(h)} for h in order]}
+
+
+def predict_t2(s, use_win=True):
+    return predict_at(s, "t2", use_win)
 
 
 def predict_outcome(pred, pts, wpts):
-    """Compare a stored prediction with what the horses really did between t2 and after_start."""
+    """Compare a stored prediction with what the horses really did from its point to after_start."""
     if not pred or not pred.get("horses"):
         return None
+    point = pred.get("at_point", "t2")
     if not (pts or {}).get("after_start"):
         return {"missing": "no_after_start"}
     horses = [h["horse"] for h in pred["horses"]]
-    q = qin_horse_drops(pts["t2"], pts["after_start"])
-    w = win_horse_drops((wpts or {}).get("t2"), (wpts or {}).get("after_start"))
-    out = {"qin_drop_pct_t2_to_after_start": {h: round(q[h], 2) for h in horses if h in q},
-           "win_drop_pct_t2_to_after_start": {h: round(w[h], 2) for h in horses if h in w}}
+    q = qin_horse_drops(pts[point], pts["after_start"])
+    w = win_horse_drops((wpts or {}).get(point), (wpts or {}).get("after_start"))
+    out = {f"qin_drop_pct_{point}_to_after_start": {h: round(q[h], 2) for h in horses if h in q},
+           f"win_drop_pct_{point}_to_after_start": {h: round(w[h], 2) for h in horses if h in w}}
     for name, actual in (("qin", q), ("win", w)):
         common = [h for h in horses if h in actual]
         if len(common) >= PREDICT_TOP:
@@ -777,25 +788,26 @@ class Recorder:
                 d["done"] = True
 
     def make_predictions(self, at):
-        """Build the t2 prediction for every race whose t2 boards are in. Returns races not yet published."""
+        """Build the t3 and t2 predictions for every race whose boards are in. Returns (race, point) not yet published."""
         due = []
         for n, s in self.state.items():
-            if s.get("t2_prediction_published"):
-                continue
-            t2 = (s.get("points") or {}).get("t2")
-            if not t2:
-                continue
-            if "t2_prediction" not in s:
-                waited = at - stamp(t2["observed_at"])
-                have_win = bool((s.get("win_points") or {}).get("t2"))
-                if not have_win and waited < PREDICT_WIN_WAIT:
+            for point in PREDICT_POINTS:
+                if s.get(f"{point}_prediction_published"):
                     continue
-                try:
-                    s["t2_prediction"] = predict_t2(s, use_win=have_win)
-                except Exception as error:  # noqa: BLE001 - a prediction bug must never stop the recorder
-                    s["t2_prediction"] = {"model": PREDICT_MODEL, "error": f"{type(error).__name__}"}
-                    log(f"R{n} prediction skipped ({type(error).__name__})")
-            due.append(n)
+                board = (s.get("points") or {}).get(point)
+                if not board:
+                    continue
+                if f"{point}_prediction" not in s:
+                    waited = at - stamp(board["observed_at"])
+                    have_win = bool((s.get("win_points") or {}).get(point))
+                    if not have_win and waited < PREDICT_WIN_WAIT:
+                        continue
+                    try:
+                        s[f"{point}_prediction"] = predict_at(s, point, use_win=have_win)
+                    except Exception as error:  # noqa: BLE001 - a prediction bug must never stop the recorder
+                        s[f"{point}_prediction"] = {"model": PREDICT_MODEL, "at_point": point, "error": type(error).__name__}
+                        log(f"R{n} {point} prediction skipped ({type(error).__name__})")
+                due.append((n, point))
         return due
 
     def dbl_wanted(self, at):
@@ -887,10 +899,12 @@ class Recorder:
         win_final, wcpoints, wcmissing = extras(win_rows, "runner",
                                                 (wlast, wlast and wlast.get("observed_at"), cutoff),
                                                 (s.get("ring") or {}).get("win"), close)
-        try:
-            outcome = predict_outcome(s.get("t2_prediction"), points, win_points)
-        except Exception as error:  # noqa: BLE001
-            outcome = {"error": type(error).__name__}
+        outcomes = {}
+        for point in PREDICT_POINTS:
+            try:
+                outcomes[point] = predict_outcome(s.get(f"{point}_prediction"), points, win_points)
+            except Exception as error:  # noqa: BLE001
+                outcomes[point] = {"error": type(error).__name__}
         iso = lambda t: t.isoformat() if isinstance(t, datetime) else None
         return {"schema": 2, "date": day, "venue": venue, "meeting_id": meeting_id, "race": n,
                 "post_time": iso(s.get("post")),
@@ -901,7 +915,8 @@ class Recorder:
                 "points": points, "missing": missing, "final_open": final, "win_final_open": win_final,
                 "close_points": cpoints, "close_missing": cmissing,
                 "win_close_points": wcpoints, "win_close_missing": wcmissing,
-                "t2_prediction": s.get("t2_prediction"), "t2_prediction_outcome": outcome,
+                "t2_prediction": s.get("t2_prediction"), "t2_prediction_outcome": outcomes["t2"],
+                "t3_prediction": s.get("t3_prediction"), "t3_prediction_outcome": outcomes["t3"],
                 "win_points": win_points, "win_missing": win_missing, "win_superseded": s.get("win_superseded", []),
                 "superseded": s.get("superseded", []),
                 "suspensions": s.get("suspensions", []), "combinations": rows, "win_runners": win_rows}
@@ -970,23 +985,22 @@ def prediction_folder(day, venue):
 
 
 def publish_predictions(recorder, archive, day, venue, meeting_id):
-    """Write each t2 prediction the moment it exists (its own small file), so it can be read before the race."""
-    for n in recorder.make_predictions(now()):
+    """Write each prediction the moment it exists (its own small file), so it can be read before the race."""
+    for n, point in recorder.make_predictions(now()):
         s = recorder.state[n]
+        pred = s[f"{point}_prediction"]
         try:
-            body = {"schema": 1, "date": day, "venue": venue, "meeting_id": meeting_id, "race": n,
+            body = {"schema": 1, "date": day, "venue": venue, "meeting_id": meeting_id, "race": n, "point": point,
                     "post_time": s["post"].isoformat() if s.get("post") else None,
-                    "prediction": s["t2_prediction"],
-                    "written_at": now().isoformat()}
-            if archive.put(f"{prediction_folder(day, venue)}/race-{n:02}-{archive.run}.json", body,
-                           f"Prediction R{n} at t2"):
-                s["t2_prediction_published"] = True
-                top = (s["t2_prediction"] or {}).get("top")
-                log(f"R{n} t2 prediction written: {top or s['t2_prediction'].get('error')}")
+                    "prediction": pred, "written_at": now().isoformat()}
+            if archive.put(f"{prediction_folder(day, venue)}/race-{n:02}-{point}-{archive.run}.json", body,
+                           f"Prediction R{n} at {point}"):
+                s[f"{point}_prediction_published"] = True
+                log(f"R{n} {point} prediction written: {pred.get('top') or pred.get('error')}")
         except SystemExit:
             raise
         except Exception as error:  # noqa: BLE001
-            log(f"R{n} prediction could not be written ({type(error).__name__}); will retry")
+            log(f"R{n} {point} prediction could not be written ({type(error).__name__}); will retry")
 
 
 def dbl_folder(day, venue):
