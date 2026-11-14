@@ -56,6 +56,9 @@ POLL = 8
 SOFT_HANDOFF = timedelta(minutes=325)       # hand over to the queued run at a quiet moment
 HARD_HANDOFF = timedelta(minutes=342)       # job timeout is 358 min
 TIME_KEYS = ("post", "close", "start", "paid", "finish", "first_seen", "last_open_at")
+START_LEAD = timedelta(minutes=50)          # recording starts this long before the first post time
+WAIT_LIMIT = timedelta(minutes=300)         # a job that is only waiting for the meeting passes the wait on after this
+FRESH_RUN_AFTER = timedelta(minutes=30)     # after waiting longer than this, record in a fresh job (full time budget)
 
 
 CLOCK_OFFSET = timedelta(0)                 # only non-zero in rehearsal mode
@@ -506,6 +509,8 @@ class Recorder:
                 if s["late"]:
                     events.append(f"R{n} already off or closed when first observed")
             if status in RACE_VOID:
+                if not s.get("void"):               # rollover points must not stay anchored to a race that never ran
+                    self.unanchor(n, s, "previous race abandoned", "close", "paid", "finish", "start")
                 s["void"] = status
 
             is_open = pool_open(qin)
@@ -514,14 +519,10 @@ class Recorder:
                 if s.get("close") and not s.get("start"):
                     events.append(f"R{n} QIN selling again; previous stop-sell treated as a suspension")
                     s["suspensions"].append({"from": s["close"].isoformat(), "to": captured.isoformat()})
+                    self.unanchor(n, s, "previous race reopened", "close")
                     s.pop("close")
                     s.pop("closed_board", None)
                     s.pop("win_closed", None)
-                    nxt = self.state.get(n + 1)
-                    if nxt and "published" not in nxt:
-                        nxt.get("win_points", {}).pop("before_rollover", None)
-                        if nxt["points"].pop("before_rollover", None):
-                            nxt["superseded"].append({"point": "before_rollover", "reason": "previous race reopened"})
             if status not in RACE_OFF and status not in RACE_VOID:
                 s["seen_prestart"] = True
             if status not in RACE_RESULT:
@@ -529,7 +530,8 @@ class Recorder:
             if win and not settled(win):
                 s["seen_unpaid"] = True
 
-            if qin and not is_open and s.get("seen_open") and "close" not in s:
+            refunded = "REFUND" in upper(qin.get("status")) or "REFUND" in upper(win.get("status"))
+            if qin and not is_open and s.get("seen_open") and "close" not in s and not s.get("void") and not refunded:
                 if post and captured < post - EARLY_STOP and status not in RACE_OFF:
                     if not s.get("suspended_now"):
                         events.append(f"R{n} QIN stopped selling before post-2min; waiting (suspension?)")
@@ -545,7 +547,7 @@ class Recorder:
             if "start" not in s and s.get("close") and captured >= s["close"] + START_CONFIRM and s.get("seen_open"):
                 s["start"], s["start_anchor"] = s["close"], "qin_stop_sell"
                 events.append(f"R{n} off assumed at stop-sell (race status unchanged)")
-            if "paid" not in s and s.get("seen_unpaid") and win and settled(win):
+            if "paid" not in s and s.get("seen_unpaid") and win and settled(win) and not refunded and not s.get("void"):
                 s["paid"] = captured
                 events.append(f"R{n} WIN payout observed")
             if "finish" not in s and s.get("seen_unfinished") and status in RACE_RESULT:
@@ -566,7 +568,7 @@ class Recorder:
             s = self.state[n]
             if "published" in s or s.get("late") or s.get("void") or not s.get("post"):
                 continue
-            prev = self.state[int(races[index - 1]["no"])] if index else {}
+            prev = self.previous(n)[1]
             targets, anchors = self.targets(s, prev)
             s["targets"], s["anchors"] = targets, anchors
             qin = pools.get((n, "QIN"), {})
@@ -657,6 +659,34 @@ class Recorder:
                                          "anchor": s["start_anchor"]}
             s["win_after_start_done"] = True
 
+    def unanchor(self, n, s, reason, *events):
+        """Drop rollover points of later races that were timed from race n's given events."""
+        stale = set()
+        for key, name, delay in (("close", "before_rollover", timedelta(0)), ("paid", "after_rollover", timedelta(minutes=2)),
+                                 ("finish", "after_rollover", timedelta(minutes=10)), ("start", "after_rollover", NO_RESULT_ANCHOR)):
+            if key in events and isinstance(s.get(key), datetime):
+                stale.add((name, (s[key] + delay).isoformat()))
+        for m, later in self.state.items():
+            if m <= n or "published" in later:
+                continue
+            for points in (later["points"], later.get("win_points", {})):
+                for name in ("before_rollover", "after_rollover"):
+                    if (name, (points.get(name) or {}).get("target_at")) in stale:
+                        points.pop(name)
+                        if points is later["points"]:
+                            later["superseded"].append({"point": name, "reason": reason})
+
+    def previous(self, n):
+        """(number, state) of the last race before n that was not abandoned/voided, else (None, {}).
+
+        Money rolls over from the last race that was really run. An abandoned race has no off and no payout,
+        so anchoring to it would put `before_rollover` at its unused post time and `after_rollover` at its refund.
+        """
+        for m in sorted((m for m in self.state if m < n), reverse=True):
+            if not self.state[m].get("void"):
+                return m, self.state[m]
+        return None, {}
+
     @staticmethod
     def targets(s, prev):
         post = s["post"]
@@ -687,7 +717,7 @@ class Recorder:
         if s.get("late"):
             return "recorder_not_running_before_race_off"
         if name in ("before_rollover", "after_rollover") and not prev:
-            return "first_race"
+            return "first_race" if n == min(self.state) else "no_earlier_race_was_run"
         target = (s.get("targets") or {}).get(name)
         if name == "after_start":
             return "no_closed_board_after_off_and_no_recent_open_board" if s.get("start") else "off_not_observed"
@@ -697,6 +727,9 @@ class Recorder:
             return "recorder_not_running_at_target"
         if name == "after_rollover" and target >= s["targets"]["t5"]:
             return "collides_with_t5"
+        if name in ("before_rollover", "after_rollover") and any(
+                self.state[m].get("void") for m in self.state if (self.previous(n)[0] or 0) < m < n):
+            return "race_in_between_abandoned_after_this_target_had_passed"
         return "no_valid_open_board_within_35s_of_target"
 
     # ---- Double (孖寶): additive, never touches the Quinella/WIN state machine ----
@@ -778,6 +811,16 @@ class Recorder:
                 d["done"] = True
         return events
 
+    def dbl_source_failed(self, at):
+        """Count a failed Double poll on every Double being watched, so an empty point can be explained."""
+        for n, s in self.state.items():
+            d = s.get("dbl") or {}
+            post = s.get("post")
+            if post and post - DBL_LEAD <= at and n + 1 in self.state and n not in self.dbl_archived \
+                    and not d.get("done") and not d.get("published") and not (s.get("late") and not s.get("start")):
+                d = s.setdefault("dbl", {"points": {}, "superseded": []})
+                d["source_failures"] = d.get("source_failures", 0) + 1
+
     def finish_dbl(self):
         """Settle every unfinished Double so nothing is lost when the run ends (missing points get a reason)."""
         for n, s in self.state.items():
@@ -840,6 +883,8 @@ class Recorder:
                 missing[name] = d["none"]
             elif d.get("late"):
                 missing[name] = "recorder_not_running_before_race_off"
+            elif d.get("source_failures") and not d.get("seen_open"):
+                missing[name] = "double_source_failed_or_rejected"
             elif name == "after_start":
                 missing[name] = "no_closed_board_after_off_and_no_recent_open_board" if s.get("start") else "off_not_observed"
             elif s["first_seen"] > s["post"] - timedelta(minutes=PRE_POST_MINUTES[name]) + WINDOW:
@@ -861,6 +906,8 @@ class Recorder:
         iso = lambda t: t.isoformat() if isinstance(t, datetime) else None
         return {"schema": 1, "pool": "DBL", "date": day, "venue": venue, "meeting_id": meeting_id,
                 "leg1": n, "leg2": n + 1, "post_time": iso(s.get("post")),
+                "leg2_void": (self.state.get(n + 1) or {}).get("void"),
+                "source_failures": d.get("source_failures", 0),
                 "events": {"stop_sell": iso(s.get("close")), "off": iso(s.get("start")),
                            "off_anchor": s.get("start_anchor"), "first_observed": iso(s.get("first_seen"))},
                 "points": points, "missing": missing, "final_open": final,
@@ -869,8 +916,7 @@ class Recorder:
 
     def record(self, n, day, venue, meeting_id):
         s = self.state[n]
-        ordered = sorted(self.state)
-        prev = self.state[ordered[ordered.index(n) - 1]] if ordered.index(n) else {}
+        rollover_from, prev = self.previous(n)
         points = {name: s["points"].get(name) for name in POINTS}
         missing = {name: self.missing_reason(n, name, s, prev) for name in POINTS if not points[name]}
         rows = []
@@ -907,7 +953,7 @@ class Recorder:
                 outcomes[point] = {"error": type(error).__name__}
         iso = lambda t: t.isoformat() if isinstance(t, datetime) else None
         return {"schema": 2, "date": day, "venue": venue, "meeting_id": meeting_id, "race": n,
-                "post_time": iso(s.get("post")),
+                "post_time": iso(s.get("post")), "rollover_from_race": rollover_from,
                 "events": {"stop_sell": iso(s.get("close")), "off": iso(s.get("start")),
                            "off_anchor": s.get("start_anchor"), "win_payout": iso(s.get("paid")),
                            "result": iso(s.get("finish")), "first_observed": iso(s.get("first_seen"))},
@@ -1095,21 +1141,90 @@ def pause(recorder, spent):
     time.sleep(wait)
 
 
+def settle_doubles(recorder, archive, day, venue, meeting_id, attempts=4):
+    """Write every Double that is still open when the run ends; a failed write is retried, never dropped."""
+    recorder.finish_dbl()
+    for attempt in range(attempts):
+        publish_dbl(recorder, archive, day, venue, meeting_id)
+        left = [n for n, s in recorder.state.items() if (s.get("dbl") or {}).get("done")
+                and not s["dbl"].get("published") and n not in recorder.dbl_archived]
+        if not left:
+            return
+        if attempt + 1 < attempts:
+            time.sleep(5)
+    log(f"Double records not stored for leg-1 races {left}")
+
+
+def dispatch_successor(why):
+    """Queue another run of this workflow. It waits in the concurrency group until this job has ended.
+
+    GitHub's own schedule is not dependable (runs are delayed by hours or dropped), so a run that has to
+    stop (hand-over, or a long wait before the meeting) queues its own successor instead of hoping for one.
+    """
+    token, repo = os.environ.get("GITHUB_TOKEN"), os.environ.get("GITHUB_REPOSITORY")
+    if not token or not repo:
+        return False
+    url = f"https://api.github.com/repos/{repo}/actions/workflows/{os.environ.get('QIN_WORKFLOW_FILE', 'record.yml')}/dispatches"
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
+               "Content-Type": "application/json", "User-Agent": "qin-recorder"}
+    for attempt in range(3):
+        try:
+            request(url, headers, data=json.dumps({"ref": os.environ.get("GITHUB_REF_NAME") or "main"}).encode(),
+                    method="POST", timeout=15)
+            log(f"Queued the next run ({why}).")
+            return True
+        except (OSError, ValueError) as error:
+            log(f"Could not queue the next run ({type(error).__name__}: {str(error)[:60]}); attempt {attempt + 1}/3")
+            time.sleep(3)
+    return False
+
+
+def todays_meetings(day, at):
+    """[(meeting, capture window opens at)] for local meetings today that are not over yet."""
+    found = []
+    for attempt in range(3):                # one bad reply must not end a job that has waited for the meeting
+        try:
+            meetings = calendar(day)
+            break
+        except (OSError, ValueError, KeyError, TypeError):
+            if attempt == 2:
+                raise
+            time.sleep(5)
+    for meeting in meetings:
+        posts = [stamp(r.get("postTime")) for r in meeting["races"]]
+        if not meeting["races"] or not all(posts) or meeting.get("date", day) != day:
+            continue
+        if at <= max(posts) + timedelta(minutes=40) and not all(
+                upper(r.get("status")) in RACE_RESULT | RACE_VOID for r in meeting["races"]):
+            found.append((meeting, min(posts) - START_LEAD))
+    return found
+
+
 def main():
     started = now()
     day = started.date().isoformat()
-    candidates = []
-    for meeting in calendar(day):
-        posts = [stamp(r.get("postTime")) for r in meeting["races"]]
-        if meeting["races"] and all(posts):
-            if min(posts) - timedelta(minutes=50) <= started <= max(posts) + timedelta(minutes=40) and not all(
-                    upper(r.get("status")) in RACE_RESULT | RACE_VOID for r in meeting["races"]):
-                candidates.append(meeting)
-    if not candidates:
-        print("No local meeting in the capture window.")
-        return
-    if len(candidates) != 1:
-        raise SystemExit("Could not uniquely identify today's local meeting.")
+    while True:
+        candidates = todays_meetings(day, now())
+        if not candidates:
+            print("No local meeting in the capture window.")
+            return
+        if len(candidates) != 1:
+            raise SystemExit("Could not uniquely identify today's local meeting.")
+        opens = candidates[0][1]
+        if now() >= opens:
+            break
+        # Started early: wait here rather than exit, because the next trigger may never come in time.
+        until = min(opens, started + WAIT_LIMIT)
+        log(f"Meeting {candidates[0][0]['id']} opens for recording at {opens:%H:%M}; waiting until {until:%H:%M}.")
+        while now() < until:
+            time.sleep(min(600, max(1, (until - now()).total_seconds())))
+        if now() < opens:
+            if dispatch_successor("still waiting for the meeting"):
+                return
+            raise SystemExit("Waited as long as one job can and could not queue the next run.")
+        if now() - started > FRESH_RUN_AFTER and dispatch_successor("meeting about to start; fresh job for the full time budget"):
+            return
+    candidates = [candidates[0][0]]
     if not all(os.environ.get(key) for key in ("PRIVATE_DATA_REPO", "PRIVATE_DATA_TOKEN")):
         raise SystemExit("Configure the private destination before starting live collection.")
     meeting_id, venue = candidates[0]["id"], candidates[0]["venueCode"]
@@ -1169,7 +1284,10 @@ def main():
                 if len(dbl) == 1:
                     for message in recorder.observe_dbl(meeting, dbl[0]["pmPools"], now()):
                         log(message)
+                else:
+                    recorder.dbl_source_failed(captured)
             except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+                recorder.dbl_source_failed(captured)
                 log(f"HKJC Double poll failed ({type(error).__name__}: {str(error)[:80]})")
         publish_dbl(recorder, archive, day, venue, meeting_id)
         last_post = max(s["post"] for s in recorder.state.values() if s.get("post"))
@@ -1189,8 +1307,7 @@ def main():
                     got = [k for k in POINTS if record["points"][k]]
                     log(f"Race {n} archived: {len(got)}/{len(POINTS)} points {got}; missing {record['missing'] or 'none'}; WIN missing {record['win_missing'] or 'none'}")
         if all("published" in recorder.state.get(int(r["no"]), {}) for r in meeting["races"]):
-            recorder.finish_dbl()
-            publish_dbl(recorder, archive, day, venue, meeting_id)
+            settle_doubles(recorder, archive, day, venue, meeting_id)
             log("All races archived.")
             return
         elapsed = now() - started
@@ -1206,16 +1323,17 @@ def main():
                                    f"Archive Quinella R{n} (incomplete)"):
                         s["published"] = archive.run
                         log(f"Race {n} archived incomplete; missing {record['missing']}")
-            recorder.finish_dbl()
-            publish_dbl(recorder, archive, day, venue, meeting_id)
+            settle_doubles(recorder, archive, day, venue, meeting_id)
             raise SystemExit("Meeting window ended before every race completed.")
         pause(recorder, time.monotonic() - tick)
     state = {"saved_at": now().isoformat(), "meeting_id": meeting_id, "state": recorder.dump()}
     for _ in range(5):
         if archive.put(f"qin-handoff/{day}_{venue}/state-{archive.run}.json", state, "Recorder hand-over state"):
             log("Job time limit near: state handed over to the next queued run.")
+            dispatch_successor("hand-over")
             return
         time.sleep(5)
+    dispatch_successor("hand-over state could not be saved")
     raise SystemExit("Could not save hand-over state.")
 
 

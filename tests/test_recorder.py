@@ -22,16 +22,20 @@ class FakeRace:
     """HKJC-like race: DECLARED -> CLOSED at the off -> RESULT; WIN pool -> PAYOUT."""
 
     def __init__(self, no, post, delay=0, result=6, payout=9, closed_status=True, nodes_after_close=True,
-                 suspend=None, scratched=(), void=False, post_shown=None, field=12):
+                 suspend=None, scratched=(), void=False, post_shown=None, field=12, abandon=None):
         self.no, self.post, self.off = no, post, post + M(delay)
         self.result, self.payout, self.closed_status = result, payout, closed_status
         self.nodes_after_close, self.suspend, self.scratched = nodes_after_close, suspend, set(scratched)
         self.void, self.post_shown, self.field = void, post_shown, field
+        self.abandon = abandon      # (selling stops, pools refunded, race status ABANDONED), as on 2026-11-14 R6
 
     def at(self, t):
         shown = self.post_shown(t) if self.post_shown else self.post
         if self.void:
             return "VOIDED", "STOP_SELL", "STOP_SELL", shown, True
+        if self.abandon and t >= self.abandon[0]:
+            return ("ABANDONED" if t >= self.abandon[2] else "DECLARED", "STOP_SELL",
+                    "REFUND_AFTER_CLOSE" if t >= self.abandon[1] else "STOP_SELL", shown, True)
         if self.suspend and self.suspend[0] <= t < self.suspend[1]:
             return "DECLARED", "STOP_SELL", "START_SELL", shown, True
         if t < self.off:
@@ -204,6 +208,45 @@ class StatusAndTiming(unittest.TestCase):
         self.assertIn("voided", pub[2][1]["missing"]["t5"])
 
 
+class AbandonedRace(unittest.TestCase):
+    """2026-11-14 Sha Tin R6: selling stopped 34 min before the post time, the pools were refunded 21 min later
+    and the race status only then became ABANDONED. R7 must take its rollover points from R5, the last race run."""
+
+    def test_rollover_points_follow_the_last_race_that_was_run(self):
+        races = card(4, {2: {"abandon": (P1 - M(4), P1 + M(8), P1 + M(8) + timedelta(seconds=48))}})
+        recorder, pub = simulate(races, P1 - M(45), P1 + M(95))
+        r2, r3 = pub[2][1], pub[3][1]
+        self.assertTrue(all(reason == "race abandoned" for reason in r2["missing"].values()))
+        self.assertIsNone(r2["events"]["stop_sell"], "an abandoned race has no stop-sell at its unused post time")
+        self.assertIsNone(r2["events"]["off"])
+        self.assertIsNone(r2["events"]["win_payout"], "a refund is not a payout")
+        self.assertEqual(r3["rollover_from_race"], 1)
+        after = r3["points"]["after_rollover"]
+        self.assertEqual(after["anchor"], "prev_win_payout_plus_2min")
+        self.assertEqual(rec.stamp(after["target_at"]), recorder.state[1]["paid"] + M(2))
+        # R2 was only known to be abandoned after R1's off, so R3's before_rollover target had already passed.
+        self.assertEqual(r3["missing"], {"before_rollover": "race_in_between_abandoned_after_this_target_had_passed"})
+        self.assertEqual(pub[4][1]["rollover_from_race"], 3)
+        self.assertEqual(pub[4][1]["missing"], {})
+
+    def test_race_known_abandoned_before_the_previous_off_gets_both_rollover_points(self):
+        races = card(3, {2: {"abandon": (P1 - M(30), P1 - M(20), P1 - M(19))}})
+        recorder, pub = simulate(races, P1 - M(45), P1 + M(65))
+        r3 = pub[3][1]
+        self.assertEqual(r3["missing"], {})
+        self.assertEqual(obs(r3, "before_rollover"), recorder.state[1]["close"])
+        self.assertLess(obs(r3, "before_rollover"), obs(r3, "after_rollover"))
+
+    def test_points_already_timed_from_a_race_later_abandoned_are_withdrawn(self):
+        # Abandoned at the start: selling stops 1 min before the post time and the status changes 20 min later.
+        races = card(3, {2: {"abandon": (P1 + M(29), P1 + M(49), P1 + M(50))}})
+        recorder, pub = simulate(races, P1 - M(45), P1 + M(65))
+        r3 = pub[3][1]
+        self.assertEqual(r3["rollover_from_race"], 1)
+        self.assertIsNone(r3["points"]["before_rollover"])
+        self.assertIn({"point": "before_rollover", "reason": "previous race abandoned"}, r3["superseded"])
+
+
 class Restarts(unittest.TestCase):
     def test_late_start_never_labels_old_boards_as_after_start(self):
         _, pub = simulate(card(), P1 + M(50), P1 + M(65))
@@ -306,6 +349,47 @@ class MainLoop(unittest.TestCase):
         races = card(2)
         self.run_main(races, P1 - M(24 * 60), "300")
         self.assertEqual(FakeArchive.files, {})
+
+    def test_a_run_started_hours_early_waits_and_records_the_whole_meeting(self):
+        # GitHub fired the schedule only twice a day: an early run must not exit and hope for a later trigger.
+        end = self.run_main(card(3), P1 - M(170), "310")
+        self.assertEqual(len(self.races()), 3)
+        for path in self.races():
+            expected = {"before_rollover": "first_race", "after_rollover": "first_race"} if "race-01-" in path else {}
+            self.assertEqual(json.loads(FakeArchive.files[path])["missing"], expected, path)
+
+    def test_after_a_long_wait_a_fresh_run_is_queued_for_the_full_time_budget(self):
+        queued, saved = [], rec.dispatch_successor
+        rec.dispatch_successor = lambda why: queued.append(why) or True
+        try:
+            end = self.run_main(card(3), P1 - M(170), "311")
+            self.assertEqual(len(queued), 1)
+            self.assertEqual(self.races(), [])
+            self.assertTrue(P1 - rec.START_LEAD <= end <= P1 - rec.START_LEAD + M(1))
+            self.run_main(card(3), end + M(1), "312")           # the queued run
+            self.assertEqual(len(queued), 1)
+            self.assertEqual(len(self.races()), 3)
+        finally:
+            rec.dispatch_successor = saved
+
+    def test_a_wait_longer_than_one_job_is_passed_on(self):
+        queued, saved = [], rec.dispatch_successor
+        rec.dispatch_successor = lambda why: queued.append(why) or True
+        try:
+            end = self.run_main(card(3), P1 - M(460), "313")
+            self.assertEqual(queued, ["still waiting for the meeting"])
+            self.assertEqual(end, P1 - M(460) + rec.WAIT_LIMIT)
+        finally:
+            rec.dispatch_successor = saved
+
+    def test_hand_over_queues_the_next_run_itself(self):
+        queued, saved = [], rec.dispatch_successor
+        rec.dispatch_successor = lambda why: queued.append(why) or True
+        try:
+            self.run_main(card(9), P1 - M(48), "320", limit=M(130))
+            self.assertEqual(queued, ["hand-over"])
+        finally:
+            rec.dispatch_successor = saved
 
 
 if __name__ == "__main__":
