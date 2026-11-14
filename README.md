@@ -77,3 +77,13 @@ board is only kept when the full leg-1 x leg-2 grid is present. Files:
 The Double query only runs from 6 minutes before a post time and is isolated from the Quinella loop: if HKJC
 rejects or fails it, Quinella and WIN recording carry on unchanged. `source_test` now also lists the Double
 pools (informational, it never fails the check).
+
+## `final_open`: the last board before the close
+
+T-5/T-3/T-2 follow the *published* post time, but HKJC often runs a race late (e.g. posted 14:25, off 14:29:57), so
+those points can sit several minutes before the real off. Every Quinella, WIN and Double record therefore also has
+`final_open` (`win_final_open` for WIN): the last board seen while the pool was still selling, with
+`seconds_before_close` (how long before the observed stop-sell it was taken, normally under 10 s). Each combination
+row has `final_open_odds` and `final_drop_pct_from_t3`. Use this as the end point when you want the price closest to the
+real off. Existing fields are unchanged. The Double poll now follows the observed off (up to 20 min past the post
+time) instead of stopping 70 s after the published post time.

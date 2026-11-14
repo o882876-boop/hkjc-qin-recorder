@@ -101,6 +101,31 @@ class DoubleRecording(unittest.TestCase):
         self.assertEqual(record["points"]["after_start"]["basis"], "closed_board_after_stop_sell")
         self.assertTrue(P1 + M(5) <= done_at <= P1 + M(5) + rec.WINDOW * 2, "archived right after the delayed off")
 
+    def test_final_open_is_the_last_open_board_even_when_the_off_is_late(self):
+        races = base.card(3, {1: {"delay": 5}})
+        _, pub = base.simulate(races, P1 - M(45), P1 + M(12))
+        qin = pub[1][1]
+        dbl = simulate_dbl(races, P1 - M(45), P1 + M(12)).dbl_record(1, DAY, "HV", MID)
+        for name, record in (("QIN", qin), ("DBL", dbl)):
+            final = record["final_open"]
+            self.assertIsNotNone(final, name)
+            self.assertEqual(final["sell_status"], "START_SELL", name)
+            self.assertTrue(rec.stamp(record["points"]["t2"]["observed_at"]) < rec.stamp(final["observed_at"]), name)
+            self.assertTrue(P1 + M(4) <= rec.stamp(final["observed_at"]) <= P1 + M(5), name)   # just before the real close
+            self.assertTrue(0 <= final["seconds_before_close"] <= 10, name)
+            row = record["combinations"][0]
+            self.assertEqual(row["final_open_odds"], final["odds"][row["combination"]], name)
+            self.assertIsNotNone(row["final_drop_pct_from_t3"], name)
+        self.assertEqual(qin["win_final_open"]["sell_status"], "START_SELL")
+        self.assertIsNotNone(qin["win_runners"][0]["final_open_odds"])
+        json.dumps(qin), json.dumps(dbl)
+
+    def test_final_open_survives_hand_over(self):
+        recorder = simulate_dbl(base.card(3), P1 - M(45), P1 - M(1))
+        again = rec.Recorder.load(json.loads(json.dumps(recorder.dump())))
+        self.assertEqual(again.state[1]["last_open_at"], recorder.state[1]["last_open_at"])
+        self.assertEqual(again.state[1]["dbl"]["last_open_at"], recorder.state[1]["dbl"]["last_open_at"])
+
     def test_polling_stops_after_the_off_and_skips_races_already_off(self):
         recorder = simulate_dbl(base.card(3), P1 - M(45), P1 + M(2))
         self.assertTrue(recorder.state[1]["dbl"]["done"] or not recorder.dbl_wanted(P1 + M(3)))
