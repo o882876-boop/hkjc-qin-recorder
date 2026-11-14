@@ -1004,9 +1004,12 @@ def rehearsal():
 
 def source_check():
     """Checks the live HKJC source. HKJC serves only the current/next meeting, never history."""
-    meetings = hkjc(GATE, {"date": None, "venueCode": None})["raceMeetings"] or []
+    all_meetings = hkjc(GATE, {"date": None, "venueCode": None})["raceMeetings"] or []
+    # Overseas simulcast meetings (e.g. venue S1/S2) are listed too; only the local ST/HV meeting is recorded.
+    meetings = [m for m in all_meetings if m.get("venueCode") in ("ST", "HV")
+                and str(m.get("id", "")).startswith("MTG_" + str(m.get("date", "")).replace("-", "") + "_")]
     if len(meetings) != 1:
-        raise SystemExit(f"HKJC calendar returned {len(meetings)} meetings.")
+        raise SystemExit(f"HKJC calendar returned {len(meetings)} local meetings ({len(all_meetings)} in total).")
     meeting = meetings[0]
     pools = hkjc(QUERY, {"date": meeting["date"], "venueCode": meeting["venueCode"], "raceNo": None,
                          "oddsTypes": ["QIN", "WIN"]})["raceMeetings"] or []
@@ -1030,6 +1033,8 @@ def source_check():
         dbl = dbl_pools_by_race(meeting["id"], odds_pools(meeting["date"], meeting["venueCode"], ("DBL",))[0]["pmPools"])
         races = {int(r["no"]): r for r in meeting["races"]}
         for n in sorted(races):
+            if n + 1 not in races:          # the last race has no Double
+                continue
             pool = dbl.get(n)
             result = dbl_board(pool, races[n], races[n + 1], now()) if pool and n + 1 in races else None
             print(f"  R{n}-R{n + 1}: DBL={'missing' if not pool else pool.get('sellStatus')} "
