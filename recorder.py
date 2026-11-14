@@ -35,6 +35,12 @@ CHANGE_INTERVALS = (*zip(POINTS, POINTS[1:]), ("t3", "after_start"))
 DBL_POINTS = (*PRE_POST_MINUTES, "after_start")
 DBL_CHANGES = (*zip(DBL_POINTS, DBL_POINTS[1:]), ("t3", "after_start"))
 DBL_LEAD = timedelta(minutes=6)             # only query the Double pool this long before a leg-1 post time
+# Points measured back from the *observed* close, so they stay right however late HKJC runs the race:
+# open boards are sampled continuously and the nearest ones to close-5/-3/-2 min are picked once the pool closes.
+CLOSE_POINTS = {"c5": 5, "c3": 3, "c2": 2}
+SAMPLE_EVERY = timedelta(seconds=20)        # keep an open board at most this often
+SAMPLE_KEEP = timedelta(minutes=8)          # the rolling window only has to reach back past close-5 min
+SAMPLE_TOLERANCE = timedelta(seconds=30)    # a sample further than this from its target is not used
 DBL_MAX_DELAY = timedelta(minutes=45)       # keep watching a delayed leg-1 race this long after its post time
 # Status vocabulary taken from HKJC's own betting site code (bet.hkjc.com main bundle).
 RACE_OFF = {"CLOSED", "RESULT"}             # race no longer selling: off / finished
@@ -268,6 +274,42 @@ def add_final_open(rows, key, final, price_of):
         row["final_drop_pct_from_t3"] = round(100 * (t3 - price) / t3, 2) if t3 and price else None
 
 
+def sample(holder, kind, board, captured):
+    """Keep a rolling window of open boards: at most one per SAMPLE_EVERY, nothing older than SAMPLE_KEEP."""
+    ring = holder.setdefault("ring", {}).setdefault(kind, [])
+    if ring and captured - stamp(ring[-1]["observed_at"]) < SAMPLE_EVERY:
+        return
+    ring.append(board)
+    while ring and captured - stamp(ring[0]["observed_at"]) > SAMPLE_KEEP:
+        ring.pop(0)
+
+
+def close_points(ring, close):
+    """({c5, c3, c2: board or None}, {name: reason}) measured back from the observed close."""
+    points, missing = {}, {}
+    for name, minutes in CLOSE_POINTS.items():
+        target = close - timedelta(minutes=minutes) if close else None
+        best = min(ring or [], key=lambda b: abs(stamp(b["observed_at"]) - target), default=None) if target else None
+        if best is not None and abs(stamp(best["observed_at"]) - target) <= SAMPLE_TOLERANCE:
+            points[name] = {**best, "target_at": target.isoformat(), "basis": "sample_relative_to_observed_close",
+                            "offset_seconds": round((stamp(best["observed_at"]) - target).total_seconds())}
+        else:
+            points[name] = None
+            missing[name] = ("close_not_observed" if not close else
+                             "no_open_board_sample_near_target" if ring else "no_open_board_samples")
+    return points, missing
+
+
+def add_close_points(rows, key, points):
+    """Attach close-relative prices and their drops to rows (existing row fields are unchanged)."""
+    for row in rows:
+        prices = {name: (p["odds"].get(row[key]) if p else None) for name, p in points.items()}
+        row["close_odds"] = prices
+        row["close_drop_pct"] = {f"{a}_to_{b}": round(100 * (prices[a] - prices[b]) / prices[a], 2)
+                                 if prices[a] and prices[b] else None
+                                 for a, b in (("c5", "c3"), ("c3", "c2"))}
+
+
 def pool_open(pool):
     return upper(pool.get("sellStatus")) == "START_SELL" and not settled(pool)
 
@@ -305,6 +347,9 @@ class Recorder:
                     s[key] = s[key].isoformat()
             s.pop("board", None)
             s.pop("targets", None)
+            s.pop("ring", None)             # rolling samples are not worth carrying over a hand-over
+            if "dbl" in s:
+                s["dbl"] = {k: v for k, v in s["dbl"].items() if k != "ring"}
             out[str(n)] = s
         return out
 
@@ -398,6 +443,7 @@ class Recorder:
             s["board"] = current
             if current and is_open:
                 s["last_open"], s["last_open_at"] = current, captured
+                sample(s, "qin", current, captured)
             if current and not is_open and s.get("close") and "closed_board" not in s \
                     and captured <= s["close"] + WINDOW:
                 s["closed_board"] = current
@@ -460,6 +506,7 @@ class Recorder:
         current = win_board(pool, race, captured)
         if current and pool_open(pool):
             s["win_last_open"] = current
+            sample(s, "win", current, captured)
         elif current and upper(pool.get("sellStatus")) == "STOP_SELL" and s.get("close"):
             s.setdefault("win_closed", current)
         for name in OPEN_POINTS:
@@ -573,6 +620,7 @@ class Recorder:
                 d.pop("closed_board", None)
                 if current:
                     d["last_open"], d["last_open_at"] = current, captured.isoformat()
+                    sample(d, "dbl", current, captured)
             elif current and d.get("seen_open") and "closed_board" not in d and captured >= post - EARLY_STOP:
                 d["closed_board"] = current
             if "late" not in d:
@@ -673,12 +721,15 @@ class Recorder:
             rows.append({"combination": pair, "odds": prices, "drop_pct": changes})
         final = final_open(d.get("last_open"), d.get("last_open_at"), s.get("close") or s.get("start"))
         add_final_open(rows, "combination", final, lambda f, k: f["odds"].get(k))
+        cpoints, cmissing = close_points(d.get("ring", {}).get("dbl"), s.get("close") or s.get("start"))
+        add_close_points(rows, "combination", cpoints)
         iso = lambda t: t.isoformat() if isinstance(t, datetime) else None
         return {"schema": 1, "pool": "DBL", "date": day, "venue": venue, "meeting_id": meeting_id,
                 "leg1": n, "leg2": n + 1, "post_time": iso(s.get("post")),
                 "events": {"stop_sell": iso(s.get("close")), "off": iso(s.get("start")),
                            "off_anchor": s.get("start_anchor"), "first_observed": iso(s.get("first_seen"))},
                 "points": points, "missing": missing, "final_open": final,
+                "close_points": cpoints, "close_missing": cmissing,
                 "superseded": d["superseded"], "combinations": rows}
 
     def record(self, n, day, venue, meeting_id):
@@ -699,6 +750,9 @@ class Recorder:
         cutoff = s.get("close") or s.get("start")
         final = final_open(s.get("last_open"), s.get("last_open_at"), cutoff)
         add_final_open(rows, "combination", final, lambda f, k: f["odds"].get(k))
+        close = s.get("close") or s.get("start")
+        cpoints, cmissing = close_points((s.get("ring") or {}).get("qin"), close)
+        add_close_points(rows, "combination", cpoints)
         win_points = {name: s.get("win_points", {}).get(name) for name in POINTS}
         win_missing = {name: self.missing_reason(n, name, s, prev) for name in POINTS if not win_points[name]}
         win_rows = []
@@ -712,6 +766,8 @@ class Recorder:
         win_final = s.get("win_last_open")
         win_final = final_open(win_final, win_final["observed_at"], cutoff) if win_final else None
         add_final_open(win_rows, "runner", win_final, lambda f, k: f["odds"].get(k))
+        wcpoints, wcmissing = close_points((s.get("ring") or {}).get("win"), close)
+        add_close_points(win_rows, "runner", wcpoints)
         iso = lambda t: t.isoformat() if isinstance(t, datetime) else None
         return {"schema": 2, "date": day, "venue": venue, "meeting_id": meeting_id, "race": n,
                 "post_time": iso(s.get("post")),
@@ -720,6 +776,8 @@ class Recorder:
                            "result": iso(s.get("finish")), "first_observed": iso(s.get("first_seen"))},
                 "target_times": {k: iso(t) for k, t in (s.get("targets") or {}).items()} | {"after_start": iso(s.get("start"))},
                 "points": points, "missing": missing, "final_open": final, "win_final_open": win_final,
+                "close_points": cpoints, "close_missing": cmissing,
+                "win_close_points": wcpoints, "win_close_missing": wcmissing,
                 "win_points": win_points, "win_missing": win_missing, "win_superseded": s.get("win_superseded", []),
                 "superseded": s.get("superseded", []),
                 "suspensions": s.get("suspensions", []), "combinations": rows, "win_runners": win_rows}
