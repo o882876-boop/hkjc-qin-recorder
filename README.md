@@ -99,3 +99,21 @@ reason in `close_missing` when one cannot be found. Each combination row gets `c
 (`c5_to_c3`, `c3_to_c2`). Nothing needs to be predicted, so a 10 or 30 minute delay, or repeated delays, make no difference.
 The close is the observed stop-sell (accurate to about 8 s). The rolling window is not carried over a hand-over, so a race
 whose run was taken over mid-race has `close_missing` instead of guessed values. Existing fields are unchanged.
+
+## t2 prediction (`predictions/`)
+
+As soon as the `t2` boards are in (Quinella and WIN, within a few seconds), the recorder ranks the horses by how strongly their
+price was *already shortening* before t2 (`momentum_v1`: mean Quinella-combination drop and WIN drop from `t5` to `t2`, each
+z-scored and added; `t3` is the reference if `t5` is missing, Quinella alone if WIN is late by more than 60 s) and writes it
+straight away, in its own small file, so it can be read before the race:
+`odds-data:predictions/YYYY-MM-DD_VENUE/race-NN-RUN.json` with `prediction.top` (3 horses expected to keep shortening until the
+close) and `prediction.horses` (every horse: score, drops, WIN price at t2).
+
+The same prediction is repeated in the race's `qin-history` record as `t2_prediction`, together with `t2_prediction_outcome`
+(what each horse really did from `t2` to `after_start`, the three that actually shortened most, and `qin_top_hits` against
+`qin_chance_hits`, the hits expected by chance). Add these up over many race days before trusting it.
+
+It predicts *which prices keep shortening*, not which horse wins. It was chosen after looking at one meeting (Sha Tin
+2026-11-14, 7 races: rank correlation about +0.4, 11 of 21 top-3 picks against about 4.6 by chance), so that figure is optimistic.
+`t2` follows the published post time, so for a race that runs late the prediction covers a longer period. A prediction bug can
+only blank the prediction (`prediction.error`), never the record.
