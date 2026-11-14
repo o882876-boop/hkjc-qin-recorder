@@ -310,6 +310,25 @@ def add_close_points(rows, key, points):
                                  for a, b in (("c5", "c3"), ("c3", "c2"))}
 
 
+def extras(rows, key, final_args, ring, close):
+    """final_open and the close-relative points for one pool, isolated: a bug here must never stop the
+    record (and the existing fields) from being written, so it only blanks the new fields with a reason."""
+    final, points, missing = None, {name: None for name in CLOSE_POINTS}, {}
+    try:
+        final = final_open(*final_args)
+        add_final_open(rows, key, final, lambda f, k: f["odds"].get(k))
+    except Exception as error:  # noqa: BLE001
+        final = None
+        log(f"final_open skipped ({type(error).__name__})")
+    try:
+        points, missing = close_points(ring, close)
+        add_close_points(rows, key, points)
+    except Exception as error:  # noqa: BLE001
+        points, missing = {name: None for name in CLOSE_POINTS}, {name: f"error_{type(error).__name__}" for name in CLOSE_POINTS}
+        log(f"close points skipped ({type(error).__name__})")
+    return final, points, missing
+
+
 def pool_open(pool):
     return upper(pool.get("sellStatus")) == "START_SELL" and not settled(pool)
 
@@ -719,10 +738,9 @@ class Recorder:
                 a, b = prices[left], prices[right]
                 changes[f"{left}_to_{right}"] = round(100 * (a - b) / a, 2) if a and b else None
             rows.append({"combination": pair, "odds": prices, "drop_pct": changes})
-        final = final_open(d.get("last_open"), d.get("last_open_at"), s.get("close") or s.get("start"))
-        add_final_open(rows, "combination", final, lambda f, k: f["odds"].get(k))
-        cpoints, cmissing = close_points(d.get("ring", {}).get("dbl"), s.get("close") or s.get("start"))
-        add_close_points(rows, "combination", cpoints)
+        cutoff = s.get("close") or s.get("start")
+        final, cpoints, cmissing = extras(rows, "combination", (d.get("last_open"), d.get("last_open_at"), cutoff),
+                                          d.get("ring", {}).get("dbl"), cutoff)
         iso = lambda t: t.isoformat() if isinstance(t, datetime) else None
         return {"schema": 1, "pool": "DBL", "date": day, "venue": venue, "meeting_id": meeting_id,
                 "leg1": n, "leg2": n + 1, "post_time": iso(s.get("post")),
@@ -747,12 +765,9 @@ class Recorder:
                 a, b = prices[left], prices[right]
                 changes[f"{left}_to_{right}"] = round(100 * (a - b) / a, 2) if a and b else None
             rows.append({"combination": pair, "odds": prices, "drop_pct": changes})
-        cutoff = s.get("close") or s.get("start")
-        final = final_open(s.get("last_open"), s.get("last_open_at"), cutoff)
-        add_final_open(rows, "combination", final, lambda f, k: f["odds"].get(k))
-        close = s.get("close") or s.get("start")
-        cpoints, cmissing = close_points((s.get("ring") or {}).get("qin"), close)
-        add_close_points(rows, "combination", cpoints)
+        cutoff = close = s.get("close") or s.get("start")
+        final, cpoints, cmissing = extras(rows, "combination", (s.get("last_open"), s.get("last_open_at"), cutoff),
+                                          (s.get("ring") or {}).get("qin"), close)
         win_points = {name: s.get("win_points", {}).get(name) for name in POINTS}
         win_missing = {name: self.missing_reason(n, name, s, prev) for name in POINTS if not win_points[name]}
         win_rows = []
@@ -763,11 +778,10 @@ class Recorder:
                 a, b = prices[left], prices[right]
                 changes[f"{left}_to_{right}"] = round(100 * (a - b) / a, 2) if a and b else None
             win_rows.append({"runner": runner, "odds": prices, "drop_pct": changes})
-        win_final = s.get("win_last_open")
-        win_final = final_open(win_final, win_final["observed_at"], cutoff) if win_final else None
-        add_final_open(win_rows, "runner", win_final, lambda f, k: f["odds"].get(k))
-        wcpoints, wcmissing = close_points((s.get("ring") or {}).get("win"), close)
-        add_close_points(win_rows, "runner", wcpoints)
+        wlast = s.get("win_last_open")
+        win_final, wcpoints, wcmissing = extras(win_rows, "runner",
+                                                (wlast, wlast and wlast.get("observed_at"), cutoff),
+                                                (s.get("ring") or {}).get("win"), close)
         iso = lambda t: t.isoformat() if isinstance(t, datetime) else None
         return {"schema": 2, "date": day, "venue": venue, "meeting_id": meeting_id, "race": n,
                 "post_time": iso(s.get("post")),

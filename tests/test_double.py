@@ -204,6 +204,28 @@ class DoubleRecording(unittest.TestCase):
         record = again.dbl_record(1, DAY, "HV", MID)         # a record from a taken-over run labels the gap
         self.assertEqual(set(record["close_missing"].values()), {"close_not_observed"})
 
+    def test_a_bug_in_the_new_fields_never_blocks_the_existing_record(self):
+        races = base.card(2)
+        recorder = simulate_dbl(races, P1 - M(45), P1 + M(12))
+        _, pub = base.simulate(races, P1 - M(45), P1 + M(12))
+        good = pub[1][1]
+        saved = rec.close_points, rec.final_open
+        rec.close_points = lambda *a, **k: (_ for _ in ()).throw(KeyError("boom"))
+        rec.final_open = lambda *a, **k: (_ for _ in ()).throw(ValueError("boom"))
+        try:
+            _, pub2 = base.simulate(races, P1 - M(45), P1 + M(12))
+            broken_qin = pub2[1][1]
+            broken_dbl = recorder.dbl_record(1, DAY, "HV", MID)
+        finally:
+            rec.close_points, rec.final_open = saved
+        for broken in (broken_qin, broken_dbl):
+            self.assertTrue(all(broken["points"][k] for k in ("t5", "t3", "t2", "after_start")))
+            self.assertIsNone(broken["final_open"])
+            self.assertEqual(set(broken["close_missing"].values()), {"error_KeyError"})
+        self.assertEqual(broken_qin["combinations"][0]["odds"], good["combinations"][0]["odds"])
+        self.assertEqual(broken_qin["win_runners"][0]["odds"], good["win_runners"][0]["odds"])
+        json.dumps(broken_qin), json.dumps(broken_dbl)
+
     def test_polling_stops_after_the_off_and_skips_races_already_off(self):
         recorder = simulate_dbl(base.card(3), P1 - M(45), P1 + M(2))
         self.assertTrue(recorder.state[1]["dbl"]["done"] or not recorder.dbl_wanted(P1 + M(3)))
