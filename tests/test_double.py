@@ -325,7 +325,45 @@ class DoubleInMainLoop(unittest.TestCase):
         for path in dbl:
             record = json.loads(base.FakeArchive.files[path])
             self.assertFalse(any(record["points"].values()))
-            self.assertTrue(all(record["missing"].values()))
+            self.assertEqual(set(record["missing"].values()), {"double_source_failed_or_rejected"})
+            self.assertGreater(record["source_failures"], 10)
+
+    def test_a_failed_write_at_the_end_of_the_meeting_is_retried(self):
+        failed = []
+
+        class Flaky(base.FakeArchive):
+            def put(self, path, payload, message):
+                if path.startswith("dbl-history/") and "race-02-" in path and len(failed) < 2:
+                    failed.append(path)             # e.g. HTTP 409 while another job commits to the same branch
+                    return False
+                return super().put(path, payload, message)
+
+        saved, saved_wanted = rec.Archive, rec.Recorder.dbl_wanted
+        rec.Recorder.dbl_wanted = lambda self, at: any(s.get("post") and at <= s["post"] + M(1) for s in self.state.values()) \
+            and saved_wanted(self, at)              # polling stops early, so R2-R3 is only settled when the run ends
+        try:
+            clock_main = base.MainLoop.run_main
+
+            def run(self_, races, start, run_id):
+                real = base.FakeArchive
+                base.FakeArchive = Flaky
+                try:
+                    return clock_main(self_, races, start, run_id)
+                finally:
+                    base.FakeArchive = real
+            run(self, base.card(3), P1 - M(45), "403")
+        finally:
+            rec.Recorder.dbl_wanted = saved_wanted
+        self.assertEqual(len(failed), 2)
+        paths = sorted(p.rsplit("/", 1)[1] for p in base.FakeArchive.files if p.startswith("dbl-history/"))
+        self.assertEqual(paths, ["race-01-403-1.json", "race-02-403-1.json"])
+
+    def test_leg2_abandoned_is_stated_in_the_record(self):
+        races = base.card(3, {2: {"abandon": (P1 - M(4), P1 + M(8), P1 + M(9))}})
+        recorder = simulate_dbl(races, P1 - M(45), P1 + M(65))
+        record = recorder.dbl_record(1, DAY, "HV", MID)
+        self.assertEqual(record["leg2_void"], "ABANDONED")
+        self.assertEqual(recorder.dbl_record(2, DAY, "HV", MID)["missing"]["t5"], "race abandoned")
 
 
 if __name__ == "__main__":

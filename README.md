@@ -13,10 +13,18 @@ standard Ubuntu runner in a public repository.
    **Contents: Read and write**). The destination needs an `odds-data` branch.
    A `PRIVATE_DATA_REPO` *variable* still works, but variables are printed in
    public logs; use the secret and delete the variable.
-3. Confirm scheduled workflows are enabled. Scheduled wake-ups run every 10
-   minutes, 11:02–23:52 Hong Kong time; a run starts recording from 50 minutes
+3. Confirm scheduled workflows are enabled. Scheduled wake-ups are requested every 10
+   minutes, 08:02–23:52 Hong Kong time; a run starts recording from 50 minutes
    before the first race. To start by hand, use **Actions → Record HKJC
    Quinella → Run workflow** with all boxes unticked.
+
+GitHub does not keep that schedule: on this repository it has fired about twice a day, hours late (on
+2026-11-14 not once before the last race, so races 1–3 were only seen after they were over). The recorder
+therefore needs **one** trigger at any time on the race day before the first race, from the schedule, by hand
+or from an outside scheduler. A run that starts early waits for the meeting instead of exiting, and a run that
+has to stop (near the 6-hour job limit, or after a long wait) queues its own successor with the workflow's
+`actions: write` token. A race that is already off when the first run starts cannot be recovered: HKJC serves
+no history.
 
 Manual checks: `source_test` checks the live HKJC source. HKJC serves only
 the current or next meeting, never history. `write_test` writes and lists a
@@ -36,6 +44,11 @@ seconds after each target the T-5, T-3 and T-2 boards were taken.
 
 The per-combination `drop_pct` includes T-3 to T-2 and T-2 to the final board,
 plus the existing T-3 to final comparison. Older archives have no `t2`.
+
+The rollover points are timed from the last race that was really run (`rollover_from_race`). An abandoned
+race is skipped: it has no off and its refund is not a payout. If a race is only declared abandoned after the
+race before it went off, the next race's `before_rollover` target has already passed and its reason is
+`race_in_between_abandoned_after_this_target_had_passed`.
 
 Race 1 has no rollover points. The recorder wakes at each target time and
 normally takes the snapshot about 1 s after it; if a poll fails it keeps
@@ -73,6 +86,10 @@ Combinations are **ordered** (`"3-7"` = horse 3 in race N, horse 7 in race N+1; 
 board is only kept when the full leg-1 x leg-2 grid is present. Files:
 `odds-data:dbl-history/YYYY-MM-DD_VENUE/race-NN-RUN.json` (`NN` = leg-1 race, schema 1). `drop_pct` has
 `t5_to_t3`, `t3_to_t2`, `t2_to_after_start` and `t3_to_after_start`.
+
+`leg2_void` says when the leg-2 race was abandoned, and `source_failures` counts failed Double polls; a Double
+whose pool could never be read has the reason `double_source_failed_or_rejected`. Records still open when the
+run ends are written with up to four attempts.
 
 The Double query only runs from 6 minutes before a post time and is isolated from the Quinella loop: if HKJC
 rejects or fails it, Quinella and WIN recording carry on unchanged. `source_test` now also lists the Double
