@@ -101,6 +101,26 @@ class DoubleRecording(unittest.TestCase):
         self.assertEqual(record["points"]["after_start"]["basis"], "closed_board_after_stop_sell")
         self.assertTrue(P1 + M(5) <= done_at <= P1 + M(5) + rec.WINDOW * 2, "archived right after the delayed off")
 
+    def test_a_30_minute_delay_keeps_final_open_fresh(self):
+        """With a 20 min cap final_open went stale (~10 min before the close); it must stay within seconds."""
+        races = base.card(2, {1: {"delay": 30}})
+        recorder, t = rec.Recorder(), P1 - M(45)
+        while t <= P1 + M(40):
+            meeting, pools = base.meeting_at(races, t)
+            recorder.observe(meeting, pools, t)
+            if recorder.dbl_wanted(t):
+                recorder.observe_dbl(meeting, dbl_pools(races, t), t)
+            t += timedelta(seconds=8)
+        record = recorder.dbl_record(1, DAY, "HV", MID)
+        self.assertEqual(record["missing"], {})
+        self.assertTrue(rec.stamp(record["points"]["after_start"]["observed_at"]) >= P1 + M(30))
+        self.assertTrue(0 <= record["final_open"]["seconds_before_close"] <= 10, record["final_open"]["seconds_before_close"])
+
+    def test_waiting_for_a_delayed_off_has_a_limit(self):
+        recorder = simulate_dbl(base.card(2, {1: {"delay": 90}}), P1 - M(45), P1 + M(30))
+        self.assertTrue(recorder.dbl_wanted(P1 + M(44)))
+        self.assertFalse(recorder.dbl_wanted(P1 + M(46)))
+
     def test_final_open_is_the_last_open_board_even_when_the_off_is_late(self):
         races = base.card(3, {1: {"delay": 5}})
         _, pub = base.simulate(races, P1 - M(45), P1 + M(12))

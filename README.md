@@ -85,5 +85,5 @@ those points can sit several minutes before the real off. Every Quinella, WIN an
 `final_open` (`win_final_open` for WIN): the last board seen while the pool was still selling, with
 `seconds_before_close` (how long before the observed stop-sell it was taken, normally under 10 s). Each combination
 row has `final_open_odds` and `final_drop_pct_from_t3`. Use this as the end point when you want the price closest to the
-real off. Existing fields are unchanged. The Double poll now follows the observed off (up to 20 min past the post
+real off. Existing fields are unchanged. The Double poll now follows the observed off (up to 45 min past the post
 time) instead of stopping 70 s after the published post time.
