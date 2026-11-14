@@ -617,6 +617,15 @@ class Recorder:
                 d["done"] = True
         return events
 
+    def finish_dbl(self):
+        """Settle every unfinished Double so nothing is lost when the run ends (missing points get a reason)."""
+        for n, s in self.state.items():
+            if n + 1 not in self.state or not s.get("post") or n in self.dbl_archived:
+                continue                    # the last race has no Double
+            d = s.setdefault("dbl", {"points": {}, "superseded": []})
+            if not d.get("published"):
+                d["done"] = True
+
     def dbl_wanted(self, at):
         """True when a Double query is worthwhile: a leg-1 race is near its off and its Double is unfinished.
 
@@ -959,6 +968,7 @@ def main():
                     got = [k for k in POINTS if record["points"][k]]
                     log(f"Race {n} archived: {len(got)}/{len(POINTS)} points {got}; missing {record['missing'] or 'none'}; WIN missing {record['win_missing'] or 'none'}")
         if all("published" in recorder.state.get(int(r["no"]), {}) for r in meeting["races"]):
+            recorder.finish_dbl()
             publish_dbl(recorder, archive, day, venue, meeting_id)
             log("All races archived.")
             return
@@ -975,6 +985,7 @@ def main():
                                    f"Archive Quinella R{n} (incomplete)"):
                         s["published"] = archive.run
                         log(f"Race {n} archived incomplete; missing {record['missing']}")
+            recorder.finish_dbl()
             publish_dbl(recorder, archive, day, venue, meeting_id)
             raise SystemExit("Meeting window ended before every race completed.")
         pause(recorder, time.monotonic() - tick)

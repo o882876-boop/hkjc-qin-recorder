@@ -126,6 +126,20 @@ class DoubleRecording(unittest.TestCase):
         self.assertEqual(again.state[1]["last_open_at"], recorder.state[1]["last_open_at"])
         self.assertEqual(again.state[1]["dbl"]["last_open_at"], recorder.state[1]["dbl"]["last_open_at"])
 
+    def test_unfinished_doubles_are_settled_when_the_run_ends(self):
+        """Run ended with R2's Double still open (2026-11-14: Double R10-R11 was never written)."""
+        recorder = simulate_dbl(base.card(3), P1 - M(45), P1 + M(29))      # stops one minute before R2's off
+        self.assertFalse(recorder.state[2]["dbl"].get("done"))
+        recorder.finish_dbl()
+        self.assertTrue(recorder.state[1]["dbl"]["done"] and recorder.state[2]["dbl"]["done"])
+        self.assertEqual(recorder.state[3]["dbl"].get("published"), "n/a")  # last race has no Double: never archived
+        record = recorder.dbl_record(2, DAY, "HV", MID)
+        self.assertEqual(record["leg1"], 2)
+        self.assertTrue(all(record["points"][k] for k in ("t5", "t3", "t2")))
+        self.assertIn("after_start", record["missing"])                    # the gap is labelled, not silent
+        self.assertIsNotNone(record["final_open"])
+        json.dumps(record)
+
     def test_polling_stops_after_the_off_and_skips_races_already_off(self):
         recorder = simulate_dbl(base.card(3), P1 - M(45), P1 + M(2))
         self.assertTrue(recorder.state[1]["dbl"]["done"] or not recorder.dbl_wanted(P1 + M(3)))
@@ -188,6 +202,23 @@ class DoubleInMainLoop(unittest.TestCase):
             self.assertEqual(record["missing"], {}, path)
         self.assertTrue(any(p.startswith("qin-history/") for p in base.FakeArchive.files))
 
+    def test_main_loop_always_writes_every_double_even_if_polling_missed_the_window(self):
+        calls = {"n": 0}
+
+        def flaky(races, t):                  # the Double endpoint fails after the first 20 minutes of the card
+            calls["n"] += 1
+            if t > P1 + M(1):
+                raise ValueError("HKJC Double endpoint down")
+            return dbl_pools(races, t)
+
+        type(self).dbl_source = staticmethod(flaky)
+        try:
+            self.run_main(base.card(3), P1 - M(45), "402")
+        finally:
+            type(self).dbl_source = staticmethod(dbl_pools)
+        paths = sorted(p.rsplit("/", 1)[1] for p in base.FakeArchive.files if p.startswith("dbl-history/"))
+        self.assertEqual(paths, ["race-01-402-1.json", "race-02-402-1.json"])
+
     def test_double_failure_does_not_disturb_quinella_records(self):
         def broken(races, t):
             raise ValueError("HKJC Double endpoint down")
@@ -199,7 +230,16 @@ class DoubleInMainLoop(unittest.TestCase):
             type(self).dbl_source = staticmethod(dbl_pools)
         qin = [p for p in base.FakeArchive.files if p.startswith("qin-history/")]
         self.assertEqual(len(qin), 3)
-        self.assertFalse([p for p in base.FakeArchive.files if p.startswith("dbl-history/")])
+        for path in qin:
+            record = json.loads(base.FakeArchive.files[path])
+            self.assertTrue(all(record["points"][k] for k in ("t5", "t3", "t2", "after_start")), path)
+        # Doubles are still written, empty and with a reason, so a gap is never silent.
+        dbl = [p for p in base.FakeArchive.files if p.startswith("dbl-history/")]
+        self.assertEqual(len(dbl), 2)
+        for path in dbl:
+            record = json.loads(base.FakeArchive.files[path])
+            self.assertFalse(any(record["points"].values()))
+            self.assertTrue(all(record["missing"].values()))
 
 
 if __name__ == "__main__":
