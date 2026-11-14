@@ -89,6 +89,18 @@ class DoubleRecording(unittest.TestCase):
         nested = simulate_dbl(base.card(3), P1 - M(45), P1 + M(5), nested=True).dbl_record(1, DAY, "HV", MID)
         self.assertEqual(flat["combinations"], nested["combinations"])
 
+    def test_real_hkjc_slash_notation_keeps_leg_order(self):
+        """HKJC publishes Double combinations as "leg1/leg2" (checked against the live source, 2026-11-14)."""
+        races = base.card(2)
+        pool = dbl_pools(races, P1 - M(10))[0]
+        for node in pool["oddsNodes"]:
+            node["combString"] = node["combString"].replace("-", "/")
+            node["oddsDropValue"], node["hotFavourite"], node["bankerOdds"] = 0, False, []
+        board = rec.dbl_board(pool, {"runners": []}, {"runners": []}, P1)
+        self.assertEqual(len(board["odds"]), 144)
+        self.assertIn("2-1", board["odds"])
+        self.assertNotEqual(board["odds"]["2-1"], board["odds"]["1-2"])
+
     def test_incomplete_grid_is_never_recorded(self):
         recorder = simulate_dbl(base.card(3), P1 - M(45), P1 + M(5), drop_node=True)
         record = recorder.dbl_record(1, DAY, "HV", MID)
