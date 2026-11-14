@@ -87,3 +87,15 @@ those points can sit several minutes before the real off. Every Quinella, WIN an
 row has `final_open_odds` and `final_drop_pct_from_t3`. Use this as the end point when you want the price closest to the
 real off. Existing fields are unchanged. The Double poll now follows the observed off (up to 45 min past the post
 time) instead of stopping 70 s after the published post time.
+
+## `c5` / `c3` / `c2`: points measured back from the real close
+
+`t5/t3/t2` are scheduled from the published post time, so a race that runs late (the off keeps slipping, or the post time is
+never updated) gets them 15/13/12 minutes before the real close instead of 5/3/2. The recorder therefore also keeps a
+rolling window of open boards (one every 20 s, last 8 minutes) for Quinella, WIN and Double. When the pool closes it picks
+the boards nearest to **observed close - 5 / - 3 / - 2 min** and stores them as `close_points` (`c5`, `c3`, `c2`,
+`win_close_points` for WIN), each with `offset_seconds` (how far the sample is from the exact target, within 30 s) and a
+reason in `close_missing` when one cannot be found. Each combination row gets `close_odds` and `close_drop_pct`
+(`c5_to_c3`, `c3_to_c2`). Nothing needs to be predicted, so a 10 or 30 minute delay, or repeated delays, make no difference.
+The close is the observed stop-sell (accurate to about 8 s). The rolling window is not carried over a hand-over, so a race
+whose run was taken over mid-race has `close_missing` instead of guessed values. Existing fields are unchanged.

@@ -160,6 +160,50 @@ class DoubleRecording(unittest.TestCase):
         self.assertIsNotNone(record["final_open"])
         json.dumps(record)
 
+    def test_close_points_follow_the_real_close_whatever_the_delay(self):
+        """c5/c3/c2 are measured back from the observed close, so a 10 or 30 minute delay still gives true 5/3/2."""
+        for delay in (0, 10, 30):
+            races = base.card(2, {1: {"delay": delay}})
+            _, pub = base.simulate(races, P1 - M(45), P1 + M(delay) + M(12))
+            qin = pub[1][1]
+            dbl = simulate_dbl(races, P1 - M(45), P1 + M(delay) + M(12)).dbl_record(1, DAY, "HV", MID)
+            close = rec.stamp(qin["events"]["stop_sell"])
+            for name, record, key in (("QIN", qin, "close_points"), ("WIN", qin, "win_close_points"), ("DBL", dbl, "close_points")):
+                self.assertEqual(record[key.replace("points", "missing")], {}, (delay, name))
+                for point, minutes in (("c5", 5), ("c3", 3), ("c2", 2)):
+                    at = rec.stamp(record[key][point]["observed_at"])
+                    self.assertLessEqual(abs(at - (close - M(minutes))), timedelta(seconds=30), (delay, name, point))
+                    self.assertEqual(record[key][point]["sell_status"], "START_SELL", (delay, name, point))
+            row = qin["combinations"][0]
+            self.assertEqual(set(row["close_odds"]), {"c5", "c3", "c2"})
+            self.assertEqual(set(row["close_drop_pct"]), {"c5_to_c3", "c3_to_c2"})
+            self.assertEqual(set(qin["win_runners"][0]["close_odds"]), {"c5", "c3", "c2"})
+            json.dumps(qin), json.dumps(dbl)
+
+    def test_a_delay_announced_late_still_gets_true_close_points(self):
+        """Posted for P1, then the off keeps slipping: 5 min late, then 12, then 20 (the post time never changes)."""
+        races = base.card(2, {1: {"delay": 20}})
+        _, pub = base.simulate(races, P1 - M(45), P1 + M(32))
+        record = pub[1][1]
+        close = rec.stamp(record["events"]["stop_sell"])
+        self.assertGreaterEqual(close, P1 + M(20))
+        for point, minutes in (("c5", 5), ("c3", 3), ("c2", 2)):
+            at = rec.stamp(record["close_points"][point]["observed_at"])
+            self.assertLessEqual(abs(at - (close - M(minutes))), timedelta(seconds=30), point)
+            self.assertGreater(at, P1 + M(14), "taken minutes before the real close, not at the old schedule")
+
+    def test_rolling_samples_stay_small_and_are_not_carried_over_a_hand_over(self):
+        recorder = simulate_dbl(base.card(3), P1 - M(45), P1 - M(1))
+        ring = recorder.state[1]["ring"]
+        self.assertLessEqual(len(ring["qin"]), 8 * 60 // 20 + 2)
+        self.assertLessEqual(len(recorder.state[1]["dbl"]["ring"]["dbl"]), 8 * 60 // 20 + 2)
+        dumped = json.loads(json.dumps(recorder.dump()))
+        self.assertNotIn("ring", dumped["1"])
+        self.assertNotIn("ring", dumped["1"]["dbl"])
+        again = rec.Recorder.load(dumped)
+        record = again.dbl_record(1, DAY, "HV", MID)         # a record from a taken-over run labels the gap
+        self.assertEqual(set(record["close_missing"].values()), {"close_not_observed"})
+
     def test_polling_stops_after_the_off_and_skips_races_already_off(self):
         recorder = simulate_dbl(base.card(3), P1 - M(45), P1 + M(2))
         self.assertTrue(recorder.state[1]["dbl"]["done"] or not recorder.dbl_wanted(P1 + M(3)))
