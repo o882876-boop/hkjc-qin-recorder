@@ -1062,6 +1062,9 @@ def source_check():
     for race in sorted(meeting["races"], key=lambda r: int(r["no"])):
         n = int(race["no"])
         qin = by_race.get((n, "QIN"))
+        if upper(race.get("status")) in RACE_VOID:      # abandoned/cancelled races have no board by design
+            print(f"  R{n}: post {race.get('postTime', '')[11:16]} race={race.get('status')} skipped (no board expected)")
+            continue
         result = board(qin, race, now()) if qin else None
         if not result:
             bad += 1
