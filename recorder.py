@@ -35,7 +35,7 @@ CHANGE_INTERVALS = (*zip(POINTS, POINTS[1:]), ("t3", "after_start"))
 DBL_POINTS = (*PRE_POST_MINUTES, "after_start")
 DBL_CHANGES = (*zip(DBL_POINTS, DBL_POINTS[1:]), ("t3", "after_start"))
 DBL_LEAD = timedelta(minutes=6)             # only query the Double pool this long before a leg-1 post time
-DBL_MAX_DELAY = timedelta(minutes=20)       # keep watching a delayed leg-1 race this long after its post time
+DBL_MAX_DELAY = timedelta(minutes=45)       # keep watching a delayed leg-1 race this long after its post time
 # Status vocabulary taken from HKJC's own betting site code (bet.hkjc.com main bundle).
 RACE_OFF = {"CLOSED", "RESULT"}             # race no longer selling: off / finished
 RACE_RESULT = {"RESULT"}
@@ -613,7 +613,7 @@ class Recorder:
                     d["done"] = True
             if "after_start" in d["points"]:
                 d["done"] = True
-            if captured > post + timedelta(minutes=40):
+            if captured > post + DBL_MAX_DELAY + timedelta(minutes=5):
                 d["done"] = True
         return events
 
