@@ -141,3 +141,18 @@ after looking at them, so the figures are optimistic): `t3` 15 races, 20 of 45 t
 correlation +0.30 with 14 of 15 races positive; `t2` 7 races, 11 of 21 against about 4.6. `t3`/`t2` follow the published post time, so
 for a race that runs late the prediction covers a longer period. A prediction bug can only blank the prediction
 (`prediction.error`), never the record.
+
+## 66888 water indices during the meeting (`record-indices.yml`)
+
+`indices_recorder.py` reads the public 66888 W/P water-index page of every race at 10, 5 and 2 minutes
+before the published post time and 1 minute after the off, and stores one JSON per race under
+`indices-live/<date>_<venue>/` in the private archive. 66888 clears the values of finished races, so these
+cannot be recovered afterwards. A point that could not be read keeps its status (`missed`, `no_values`,
+`no_data`, `error`, `verification_wall`); nothing is filled in. Values are the page as displayed at capture
+time, not 66888's own history. It reuses the meeting calendar and private archive writer of `recorder.py`,
+checks robots.txt first (fail closed) and stops at a verification wall.
+
+Trigger it once on race day before the first race (it waits for the meeting, up to 5.5 hours), preferably
+from the same external scheduler that triggers `record.yml`: `POST /repos/<owner>/hkjc-qin-recorder/actions/workflows/record-indices.yml/dispatches`
+with `{"ref":"main"}`. A backup schedule exists but GitHub fires it unreliably. Checks: `probe` reads race 1
+once and reports the status; `write_test` verifies the private archive write.

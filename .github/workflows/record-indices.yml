@@ -1,0 +1,42 @@
+name: Record 66888 water indices
+# Reads the public 66888 W/P water-index page of every race shortly before each off (t10, t5, t2) and
+# just after it, while a local meeting is running, and stores one JSON per race in the private archive.
+# 66888 clears finished races, so this cannot be recovered later. Runs in this public repository so that
+# waiting for the meeting costs nothing. A run started early waits for the meeting; one trigger any time
+# before the first race is enough (use the external scheduler; GitHub's own schedule is unreliable).
+on:
+  schedule:
+    # Backup only: UTC, every 2 hours from Hong Kong 10:17 to 22:17. Exits at once when no meeting is near.
+    - cron: '17 2-14/2 * * *'
+  workflow_dispatch:
+    inputs:
+      probe:
+        description: Read race 1 of the active meeting once and report the status only
+        type: boolean
+        default: false
+      write_test:
+        description: Verify private archive writes without race data
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: ${{ (inputs.probe || inputs.write_test) && 'hkjc-indices-test' || 'hkjc-indices-live' }}
+  cancel-in-progress: false
+jobs:
+  record:
+    if: github.repository == 'o882876-boop/hkjc-qin-recorder' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 358
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - run: pip install 'selenium>=4.20,<5' 'beautifulsoup4>=4.12,<5'
+      - run: python3 -u indices_recorder.py
+        env:
+          INDICES_PROBE: ${{ inputs.probe }}
+          INDICES_WRITE_TEST: ${{ inputs.write_test }}
+          PRIVATE_DATA_REPO: ${{ secrets.PRIVATE_DATA_REPO || vars.PRIVATE_DATA_REPO }}
+          PRIVATE_DATA_TOKEN: ${{ secrets.PRIVATE_DATA_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
