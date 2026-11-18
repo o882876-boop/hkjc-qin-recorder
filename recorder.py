@@ -14,12 +14,16 @@ import json
 import math
 import os
 import re
+import sys
 import time
 from datetime import datetime, timedelta
 from urllib.error import HTTPError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import windrop  # noqa: E402  (pure functions, no I/O)
 
 HK = ZoneInfo("Asia/Hong_Kong")
 ENDPOINT = "https://info.cld.hkjc.com/graphql/base-get/"
@@ -853,6 +857,29 @@ class Recorder:
                 due.append((n, point))
         return due
 
+    def make_windrops(self, at):
+        """Build the windrop_v1 prediction at t5, t3 and t2 for every race whose boards are in. Returns (race, point) not yet published."""
+        due = []
+        for n, s in self.state.items():
+            for point in windrop.POINTS:
+                key = f"windrop_{point}"
+                if s.get(f"{key}_published"):
+                    continue
+                board = (s.get("points") or {}).get(point)
+                if not board:
+                    continue
+                if key not in s:
+                    waited = at - stamp(board["observed_at"])
+                    if not (s.get("win_points") or {}).get(point) and waited < PREDICT_WIN_WAIT:
+                        continue
+                    try:
+                        s[key] = windrop.predict_windrop(s, point)
+                    except Exception as error:  # noqa: BLE001 - a prediction bug must never stop the recorder
+                        s[key] = {"model": windrop.MODEL, "at_point": point, "error": type(error).__name__}
+                        log(f"R{n} {point} windrop skipped ({type(error).__name__})")
+                due.append((n, point))
+        return due
+
     def dbl_wanted(self, at):
         """True when a Double query is worthwhile: a leg-1 race is near its off and its Double is unfinished.
 
@@ -951,6 +978,12 @@ class Recorder:
                 outcomes[point] = predict_outcome(s.get(f"{point}_prediction"), points, win_points)
             except Exception as error:  # noqa: BLE001
                 outcomes[point] = {"error": type(error).__name__}
+        windrop_outcomes = {}
+        for point in windrop.POINTS:
+            try:
+                windrop_outcomes[point] = windrop.windrop_outcome(s.get(f"windrop_{point}"), win_points)
+            except Exception as error:  # noqa: BLE001
+                windrop_outcomes[point] = {"error": type(error).__name__}
         iso = lambda t: t.isoformat() if isinstance(t, datetime) else None
         return {"schema": 2, "date": day, "venue": venue, "meeting_id": meeting_id, "race": n,
                 "post_time": iso(s.get("post")), "rollover_from_race": rollover_from,
@@ -963,6 +996,8 @@ class Recorder:
                 "win_close_points": wcpoints, "win_close_missing": wcmissing,
                 "t2_prediction": s.get("t2_prediction"), "t2_prediction_outcome": outcomes["t2"],
                 "t3_prediction": s.get("t3_prediction"), "t3_prediction_outcome": outcomes["t3"],
+                "windrop": {p: s.get(f"windrop_{p}") for p in windrop.POINTS},
+                "windrop_outcome": windrop_outcomes,
                 "win_points": win_points, "win_missing": win_missing, "win_superseded": s.get("win_superseded", []),
                 "superseded": s.get("superseded", []),
                 "suspensions": s.get("suspensions", []), "combinations": rows, "win_runners": win_rows}
@@ -1047,6 +1082,25 @@ def publish_predictions(recorder, archive, day, venue, meeting_id):
             raise
         except Exception as error:  # noqa: BLE001
             log(f"R{n} {point} prediction could not be written ({type(error).__name__}); will retry")
+
+
+def publish_windrops(recorder, archive, day, venue, meeting_id):
+    """Write each windrop_v1 prediction the moment it exists (its own file next to the other predictions)."""
+    for n, point in recorder.make_windrops(now()):
+        s = recorder.state[n]
+        pred = s[f"windrop_{point}"]
+        try:
+            body = {"schema": 1, "date": day, "venue": venue, "meeting_id": meeting_id, "race": n, "point": point,
+                    "kind": "windrop", "post_time": s["post"].isoformat() if s.get("post") else None,
+                    "prediction": pred, "written_at": now().isoformat()}
+            if archive.put(f"{prediction_folder(day, venue)}/race-{n:02}-windrop-{point}-{archive.run}.json", body,
+                           f"Windrop prediction R{n} at {point}"):
+                s[f"windrop_{point}_published"] = True
+                log(f"R{n} {point} windrop written: {pred.get('top') or pred.get('error')}")
+        except SystemExit:
+            raise
+        except Exception as error:  # noqa: BLE001
+            log(f"R{n} {point} windrop could not be written ({type(error).__name__}); will retry")
 
 
 def dbl_folder(day, venue):
@@ -1278,6 +1332,7 @@ def main():
                 break
             continue
         publish_predictions(recorder, archive, day, venue, meeting_id)
+        publish_windrops(recorder, archive, day, venue, meeting_id)
         if recorder.dbl_wanted(captured):
             try:                              # isolated: a Double failure must never disturb the Quinella loop
                 dbl = odds_pools(day, venue, ("DBL",))

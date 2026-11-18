@@ -156,3 +156,17 @@ Trigger it once on race day before the first race (it waits for the meeting, up 
 from the same external scheduler that triggers `record.yml`: `POST /repos/<owner>/hkjc-qin-recorder/actions/workflows/record-indices.yml/dispatches`
 with `{"ref":"main"}`. A backup schedule exists but GitHub fires it unreliably. Checks: `probe` reads race 1
 once and reports the status; `write_test` verifies the private archive write.
+
+## windrop_v1: predicted WIN shortening and close price (t5, t3, t2)
+
+At t5, t3 and t2 of every race the recorder also writes `predictions/<date>_<venue>/race-NN-windrop-<point>-<run>.json`
+(written the moment the board is in, before the race) and repeats it in the race record (`windrop`, `windrop_outcome`
+after the off). Per horse: WIN odds now, WIN-implied %, Quinella support %, `lead_pct` (Quinella support / WIN-implied - 1),
+`score`, `rank`, `predicted_drop_pct` (+ = WIN expected to shorten until the close) and `predicted_close_odds`.
+`top` is the three highest scores. See `windrop.py` for the exact formula and coefficients.
+
+Fitted on 16 races (Sha Tin 2026-11-14, Happy Valley 2026-11-18, 204 runners); two meetings, so treat it as exploratory.
+Leave-one-race-out: about 54% of the top three shortened by 10% or more (about 21% of all runners do); the typical error
+of the predicted close price is about 20-25% (mean |ln error| 0.225 at t2 against 0.264 for favourite-ness alone and 0.346
+for "close = now"). A ranking signal, not a betting recommendation. Refit the coefficients as more race days are stored;
+`windrop_outcome` in each race record is the out-of-sample check.
