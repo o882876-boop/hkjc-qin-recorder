@@ -122,6 +122,48 @@ class Model(unittest.TestCase):
         self.assertTrue(five["qin_fly_all_points"])
         self.assertIn("5", pred["qin_fly"])
 
+    def rising_state(self):
+        s = state("5", "t2")
+        s["points"]["after_rollover"] = qin_board(None)
+        s["points"]["t5"] = qin_board("3")             # horse 3 is the Quinella favourite at t5, horse 5 at t3 and t2
+        s["points"]["t3"] = qin_board("5")
+        s["win_points"]["t3"] = {"odds": dict(WIN), "observed_at": "x"}
+        return s
+
+    def test_quinella_share_path_starts_at_the_previous_payout_and_counts_steps_up(self):
+        pred = windrop.predict_windrop(self.rising_state(), "t2")
+        rows = {h["horse"]: h for h in pred["horses"]}
+        five = rows["5"]
+        self.assertEqual(list(five["qin_pct_path"]), ["after_rollover", "t5", "t3", "t2"])
+        self.assertEqual((five["qin_rise_steps"], five["qin_rise_steps_possible"]), (1, 3))     # down at t5, up at t3, unchanged at t2 (not a rise)
+        self.assertFalse(five["qin_rise_all_steps"])
+        path = five["qin_pct_path"]
+        self.assertAlmostEqual(five["qin_rise_from_rollover_pct"], 100 * (path["t2"] / path["after_rollover"] - 1), delta=0.2)
+        self.assertAlmostEqual(five["qin_rise_from_t5_pct"], 100 * (path["t2"] / path["t5"] - 1), delta=0.2)
+        self.assertGreater(five["qin_rise_from_t5_pct"], 0)
+        self.assertIn("3", pred["qin_fall5_from_t5"])                 # 3 lost far more than 5% of its share from t5 to t2
+        self.assertNotIn("5", pred["qin_fall5_from_t5"])
+        self.assertIn("qin_rise_validation", pred)
+        json.dumps(pred)
+
+    def test_all_steps_up_needs_the_after_rollover_board(self):
+        s = state("5", "t2")
+        s["points"]["t5"], s["points"]["t3"] = qin_board(None), qin_board(None)
+        s["win_points"]["t3"] = {"odds": dict(WIN), "observed_at": "x"}
+        pred = windrop.predict_windrop(s, "t2")                         # race 1: no after_rollover board
+        for h in pred["horses"]:
+            self.assertFalse(h["qin_rise_all_steps"])
+            self.assertNotIn("qin_rise_from_rollover_pct", h)
+            self.assertEqual(h["qin_rise_steps_possible"], 2)
+        self.assertEqual(pred["qin_rise_all_steps"], [])
+
+    def test_rise_outcome_counts_the_all_steps_up_and_fall_groups(self):
+        pred = windrop.predict_windrop(self.rising_state(), "t2")
+        out = windrop.windrop_outcome(pred, {"after_start": {"odds": {**WIN, "3": 9.0, "5": 9.0}}})
+        self.assertEqual(out["fall5_n"], len(pred["qin_fall5_from_t5"]))
+        self.assertIn("fall5_fell_10pct", out)
+        self.assertIn("rise_all_n", out)
+
     def test_quinella_fly_outcome_counts_each_group(self):
         pred = windrop.predict_windrop(state("5"), "t3")
         out = windrop.windrop_outcome(pred, {"after_start": {"odds": {**WIN, "5": 9.0}}})

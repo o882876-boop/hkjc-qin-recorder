@@ -64,6 +64,34 @@ no_fly horses were 16% against 50% for fly horses. As a pick it is weak (fly hor
 (5-7%): not excluded, but not a reason to back a horse. Combine with the scores and flag list above. The six strict-rule misses were mostly
 within 1 point of equal (two of the user's picks), which is why `tie` exists. `backtest.py` prints this table; `report.py` scores it live.
 
+## Quinella share path from the previous payout (`qin_rise_*`)
+
+The user's second idea: the horse's share of the Quinella pool going up, starting at 過關後 (`after_rollover`, 2 minutes after the previous race's WIN
+payout) and then t5, t3, t2. Same relative-rise formula as the Double support sheet and `dbl_support.py` (share now / older share - 1). Fields per row (races 2+;
+race 1 has no `after_rollover` board): `qin_pct_path`, `qin_rise_from_rollover_pct`, `qin_rise_from_t5_pct`, `qin_rise_steps` (of `qin_rise_steps_possible`),
+`qin_rise_all_steps`; on the prediction `qin_rise_all_steps` (list), `qin_fall5_from_t5` (t2 only), `qin_rise_validation`. 16 races, races 2+, 192 runners (20% shortened 10%+):
+
+| | runners | shortened 10%+ |
+|---|---|---|
+| up at every step after_rollover -> t5 -> t3 -> t2 | 53 | 23% |
+| quinella fly **and** every step up | 31 | 35% (fly alone 103, 33%) |
+| no fly but every step up | 22 | 5% |
+| fly, rise from after_rollover 5-10% / 10%+ / falling | 14 / 35 / 36 | 43% / 40% / 22% |
+| t5 -> t2 share down 5%+ (all 204 runners) | 17 | **0** |
+
+A **weak helper** on top of the fly state, not a signal of its own (no fly + rising = 5%). The after_rollover board is thin (the step to t5 is noise: 18-20% either
+way), so t5 -> t2 is the cleaner part; its mirror, share down 5%+ from t5 to t2, is the only usable exclusion reference (`qin_fall5_from_t5`, 0 of 17).
+Plain counts, no fitted parameter; `backtest.py` prints them.
+
+## Take-out (why no 82.5% adjustment is needed)
+
+Leave-one-out is not involved; this is arithmetic on the recorded boards (16 races, t2): the sum of `1/odds` over a pool is `1/(1 - take-out)` when the
+combinations are exclusive. WIN 1.232 (implied 18.8%), Quinella 1.228 (18.6%): the **same** take-out (official 17.5%, the rest is odds rounding), so shares
+normalised inside each pool (qin share vs WIN-implied share) compare like with like and the take-out cancels. The Double pool sums to 1.45 (about 31%; 999-capped prices
+and rounding blur this, do not quote it as the official rate), so a fair Double price is about `(1 - t_double)/(1 - t_win)^2 x W1 x W2` = about 1.05 x W1 x W2 and the observed
+median of `DBL / (W1 x W2)` is 1.03: "Double below the product of the two WIN prices" is already about the break-even, and dividing by 0.825 would wrongly make 67% of
+combinations look cheap (47% below the product). Rankings and z-scores are unaffected by any constant, so `edge` needs no adjustment either.
+
 ## Where it is written
 
 Recorder (`recorder.py`, state in `make_windrops`, `make_windrops_dbl`; files in `publish_windrops`, `publish_windrops_dbl`), once per

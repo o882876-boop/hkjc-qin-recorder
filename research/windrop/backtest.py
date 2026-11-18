@@ -69,7 +69,8 @@ def load_races(data, days=None):
                       and all(h in boards[k] for k in ("t5", "t3", "t2")) and (not first_ok or (win["before_rollover"].get(h) and h in boards["before_rollover"]))]
             if len(horses) < windrop.MIN_HORSES:
                 continue
-            race = {"race": (day_dir.name, n), "horses": horses, "feat": {}, "y": {}, "ly": {}, "w": {}, "dbl": False,
+            path = {pt: {h: 100 * v for h, v in windrop.qin_shares(board(q, pt)).items()} for pt in windrop.RISE_POINTS if (q["points"] or {}).get(pt)}
+            race = {"race": (day_dir.name, n), "horses": horses, "feat": {}, "y": {}, "ly": {}, "w": {}, "dbl": False, "path": path,
                     "qin_t5": board(q, "t5"), "qin_t2": board(q, "t2"), "win_t2": win["t2"], "win_close": win["after_start"]}
             for point in (k for k in POINTS if k in win and k in boards and (k != "before_rollover" or first_ok)):
                 w = np.array([win[point][h] for h in horses])
@@ -209,6 +210,29 @@ def fly_filter_summary(races):
             + f" | excluding no_fly keeps {fallers - counts['no_fly'][1]}/{fallers} fallers")
 
 
+def rise_summary(races):
+    """Quinella share path from the previous payout (races 2+) and the t5 -> t2 fall (exclusion reference); no fitted parameter."""
+    allup = {"n": 0, "f": 0}; flyup = {"n": 0, "f": 0}; fly = {"n": 0, "f": 0}; nofly_up = {"n": 0, "f": 0}; fall = {"n": 0, "f": 0}; total = {"n": 0, "f": 0}
+    for r in races:
+        path = r["path"]
+        if not all(pt in path for pt in ("t5", "t3", "t2")):
+            continue
+        for i, h in enumerate(r["horses"]):
+            fell = r["y"]["t2"][i] >= THRESHOLD
+            is_fly = r["gap"]["t2"][i] > 0
+            if "after_rollover" in path and all(h in path[pt] for pt in windrop.RISE_POINTS):
+                total["n"] += 1; total["f"] += fell
+                up = all(path[b][h] > path[a][h] for a, b in zip(windrop.RISE_POINTS, windrop.RISE_POINTS[1:]))
+                for grp, ok in ((allup, up), (flyup, up and is_fly), (fly, is_fly), (nofly_up, up and not is_fly)):
+                    grp["n"] += ok; grp["f"] += ok and fell
+            if all(h in path[pt] for pt in ("t5", "t2")) and 100 * (path["t2"][h] / path["t5"][h] - 1) <= windrop.FALL_EXCLUDE_PCT:
+                fall["n"] += 1; fall["f"] += fell
+    pct = lambda g: f"{100 * g['f'] / max(g['n'], 1):.0f}% ({g['f']}/{g['n']})"
+    print(f"races 2+ ({total['n']} runners, shortened {THRESHOLD:g}%+: {pct(total)}): up at every step after_rollover -> t5 -> t3 -> t2: {pct(allup)}; "
+          f"fly and every step up: {pct(flyup)}; fly: {pct(fly)}; no fly but every step up: {pct(nofly_up)}")
+    print(f"t5 -> t2 share down {abs(windrop.FALL_EXCLUDE_PCT):g}%+ (all races): {fall['n']} runners, shortened {THRESHOLD:g}%+: {fall['f']}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--data", required=True, help="local checkout of the odds-data branch")
@@ -231,6 +255,8 @@ def main():
             summarise(f"combined {point}", leave_one_out(dbl, point, ["edge", "lead"], {"edge": 1.0, "lead": 1.0}))
     print("\n== Quinella 飛 filter (no fitted parameter): fly / tie / no_fly by share gap ==")
     fly_filter_summary(races)
+    print("\n== Quinella share path from the previous payout (qin_rise_*), no fitted parameter ==")
+    rise_summary(races)
     print("\n== Longshot supplement (windrop_longshot_v1, no model: a flag) ==")
     longshot_summary(races)
     if args.refit:

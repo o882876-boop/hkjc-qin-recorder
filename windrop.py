@@ -230,6 +230,60 @@ def qin_fly_fields(groups, point):
             "qin_fly_validation": QIN_FLY_VALIDATION[point]}
 
 
+# Quinella share path from the previous race's payout (the user's request: start at 過關後, not t5): the horse's share of the Quinella
+# pool at after_rollover, t5, t3, t2 (races 2+; race 1 has no after_rollover board) and how often it went up step by step.
+#   qin_rise_from_rollover_pct  share at this point / share at after_rollover - 1
+#   qin_rise_steps / _possible  steps up out of after_rollover->t5->t3->t2 so far;  qin_rise_all_steps = every step up
+#   qin_rise_from_t5_pct        share now / share at t5 - 1 (less noisy: the after_rollover board is thin)
+# 16 races, races 2+ (192 runners, 20% shortened 10%+): going up at every step is only a weak helper (23% of 53; with qin fly 35% of 31 against
+# 33% of all fly horses; without fly 5%). Rise from rollover with fly: 5-10% -> 43%, 10%+ -> 40%, falling -> 22%. From t5 the signal is a bit clearer
+# (fly horses up 6%+ at t2: 50% of 14) and its mirror is the only usable exclusion: a share down 5%+ from t5 to t2 shortened 10%+ in 0 of 17 horses.
+RISE_POINTS = ("after_rollover", "t5", "t3", "t2")
+FALL_EXCLUDE_PCT = -5.0
+QIN_RISE_VALIDATION = {"races": 16, "runners_with_rollover": 192, "fallers_base": 0.20,
+                       "all_steps_up": {"n": 53, "fell_10pct": 0.23}, "fly_and_all_steps_up": {"n": 31, "fell_10pct": 0.35},
+                       "fly_all": {"n": 103, "fell_10pct": 0.33}, "no_fly_and_all_steps_up": {"n": 22, "fell_10pct": 0.05},
+                       "fly_rise_from_rollover": {"down": [36, 0.22], "0-5%": [18, 0.33], "5-10%": [14, 0.43], "10%+": [35, 0.40]},
+                       "t5_to_t2": {"down_5pct_or_more": {"n": 17, "fell_10pct": 0.0}, "fly_up_6pct_or_more": {"n": 14, "fell_10pct": 0.50}}}
+
+
+def qin_share_path(s, upto):
+    """{point: {horse: share %}} of the Quinella pool at after_rollover, t5, t3, t2 up to `upto` (only boards that exist)."""
+    out = {}
+    for point in RISE_POINTS[:RISE_POINTS.index(upto) + 1]:
+        shares = qin_shares((((s.get("points") or {}).get(point) or {}).get("odds")) or {})
+        if len(shares) >= MIN_HORSES:
+            out[point] = {h: 100 * v for h, v in shares.items()}
+    return out
+
+
+def add_qin_rise(s, point, rows):
+    """Add the Quinella share path fields to prediction rows; returns the prediction-level lists."""
+    path = qin_share_path(s, point)
+    if point not in path:
+        return {}
+    all_up, fall5 = [], []
+    for row in rows:
+        h = row["horse"]
+        seq = [(pt, path[pt][h]) for pt in RISE_POINTS if pt in path and h in path[pt]]
+        if len(seq) < 2 or seq[-1][0] != point:
+            continue
+        ups = [b > a for (_, a), (_, b) in zip(seq, seq[1:])]
+        values = dict(seq)
+        row["qin_pct_path"] = {pt: round(v, 2) for pt, v in seq}
+        row["qin_rise_steps"], row["qin_rise_steps_possible"] = sum(ups), len(ups)
+        row["qin_rise_all_steps"] = all(ups) and seq[0][0] == "after_rollover"
+        if "after_rollover" in values and point != "after_rollover":
+            row["qin_rise_from_rollover_pct"] = round(100 * (values[point] / values["after_rollover"] - 1), 1)
+        if "t5" in values and point != "t5":
+            row["qin_rise_from_t5_pct"] = round(100 * (values[point] / values["t5"] - 1), 1)
+            if point == "t2" and row["qin_rise_from_t5_pct"] <= FALL_EXCLUDE_PCT:
+                fall5.append(h)
+        if row["qin_rise_all_steps"]:
+            all_up.append(h)
+    return {"qin_rise_all_steps": all_up, "qin_fall5_from_t5": fall5, "qin_rise_validation": QIN_RISE_VALIDATION}
+
+
 # Flag list: every horse whose predicted close price is at least 5% shorter than its price now (predicted_drop_pct >= 5,
 # i.e. predicted_close_odds <= win_odds x 0.95). No top-N: a race can have 0 or 5 flagged horses.
 FLAG_MIN_DROP_PCT = 5.0
@@ -288,7 +342,7 @@ def predict_windrop(s, point):
     for rank, row in enumerate(rows, 1):
         row["rank"] = rank
     flagged = flag_rows(rows)
-    fly = qin_fly_fields(add_qin_fly(s, point, rows), point)
+    fly = {**qin_fly_fields(add_qin_fly(s, point, rows), point), **add_qin_rise(s, point, rows)}
     return {"model": MODEL, "at_point": point, "made_at": (pts.get(point) or {}).get("observed_at"), **fly,
             "target_at": (pts.get(point) or {}).get("target_at"),
             "inputs": ["WIN", "QIN"], "top": [r["horse"] for r in rows[:TOP]], "horses": rows,
@@ -313,6 +367,11 @@ def _flag_outcome(pred, rows):
             fly[f"{name}_n"] = len(group)
             fly[f"{name}_fell_10pct"] = sum(r["actual_drop_pct"] >= 10 for r in group)
         fly["fell_10pct_total"] = sum(r["actual_drop_pct"] >= 10 for r in rows)
+        for name, key in (("rise_all", "qin_rise_all_steps"), ("fall5", "qin_fall5_from_t5")):
+            if key in pred:
+                group = [r for r in rows if r["horse"] in set(pred.get(key) or [])]
+                fly[f"{name}_n"] = len(group)
+                fly[f"{name}_fell_10pct"] = sum(r["actual_drop_pct"] >= 10 for r in group)
     return {**fly, "flagged_n": len(hit), "flagged_fell_any": sum(r["actual_drop_pct"] > 0 for r in hit),
             "flagged_fell_10pct": sum(r["actual_drop_pct"] >= 10 for r in hit), "missed_fell_10pct": len(missed),
             "missed_horses": [r["horse"] for r in missed]}
@@ -458,7 +517,8 @@ def predict_dbl(s, prev, point, combined=False):
             row["signals"] = {"edge_top3": row["horse"] in top_edge, "lead_top3": row["horse"] in top_lead}
             row["signals_fired"] = sum(row["signals"].values())
     flagged = flag_rows(rows)
-    fly = qin_fly_fields(add_qin_fly(s, point, rows), point) if point in DBL_COMBINED_POINTS else {}
+    fly = ({**qin_fly_fields(add_qin_fly(s, point, rows), point), **add_qin_rise(s, point, rows)}
+           if point in DBL_COMBINED_POINTS else {})
     return {**base, **fly, "flagged": flagged, "flag_rule": FLAG_RULE,
             "flag_validation": FLAG_VALIDATION["combined" if combined else "dbl"][point], "made_at": (pts.get(key) or {}).get("observed_at"), "target_at": (pts.get(key) or {}).get("target_at"),
             "inputs": ["WIN", "DBL"] + (["QIN"] if combined else []), "leg1_cap_odds": LEG1_CAP,

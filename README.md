@@ -212,3 +212,9 @@ Every Quinella, Double and combined prediction row says whether the horse's Quin
 `fly`, `tie` within 1 percentage point below, `no_fly` below that; `qin_fly_points` for t5/t3/t2). `qin_no_fly` is the exclusion list (tie is never
 excluded). 16 races: no_fly horses shortened 10%+ only about 9-10% of the time (all runners 21%) and 39 of 42 fallers were kept. An exclusion
 filter, not a pick. See docs/WINDROP.md.
+
+### Quinella share path from the previous payout
+
+Rows also carry the Quinella-pool share path after_rollover -> t5 -> t3 -> t2 (`qin_pct_path`, `qin_rise_from_rollover_pct`, `qin_rise_from_t5_pct`,
+`qin_rise_steps`, `qin_rise_all_steps`) and, at t2, `qin_fall5_from_t5`: horses whose share fell 5%+ from t5 (0 of 17 shortened 10%+). Rising at every step is only
+a weak helper on top of qin fly (fly + every step up 35% of 31; no fly + every step up 5%). See docs/WINDROP.md.
