@@ -111,7 +111,7 @@ class PredictionInMainLoop(unittest.TestCase):
 
     def test_each_race_gets_a_t3_and_a_t2_prediction_file_written_in_time_and_repeated_in_its_record(self):
         self.run_main(base.card(3), P1 - M(45), "500")
-        names = [p.rsplit("/", 1)[1] for p in self.files("predictions/") if "-windrop-" not in p]
+        names = [p.rsplit("/", 1)[1] for p in self.files("predictions/") if "-windrop-" not in p and not p.endswith("summary.md")]
         self.assertEqual(names, sorted(f"race-0{i}-{pt}-500-1.json" for i in (1, 2, 3) for pt in ("t2", "t3")))
         for point, early, late in (("t3", 4, 2), ("t2", 3, 1)):
             for i in (1, 2, 3):

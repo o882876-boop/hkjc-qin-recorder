@@ -102,6 +102,9 @@ point, the moment the board is in (before the race), to the private `odds-data` 
 
 - `predictions/<date>_<venue>/race-NN-windrop-<t5|t3|t2>-<run>.json` (`prediction` = Quinella, `longshot` at t2)
 - `predictions/<date>_<venue>/race-NN-windrop-dbl-<first|t5|t2>-<run>.json` (`prediction` = Double, `combined` = Double + Quinella, null at `first`)
+- `predictions/<date>_<venue>/summary.md` — **the readable one**: a markdown page (horse names, per-race table, flagged list, 有飛/打和/冇飛,
+  share path, edge, predicted close, and after the race the actual close and shortening) rewritten during the race day (`windrop_summary.py`,
+  `publish_summary`, at most every 45 s and only when the content changed, final write when the meeting ends). Open it on GitHub.
 - the race record `qin-history/.../race-NN-*.json` repeats them as `windrop`, `windrop_dbl`, `windrop_combined`, `windrop_longshot` with
   `*_outcome` after the close: per horse predicted vs actual close, `flagged_n`, `flagged_fell_any`, `flagged_fell_10pct`,
   `missed_fell_10pct`, `brier_10pct`, `in_50pct_band`.
