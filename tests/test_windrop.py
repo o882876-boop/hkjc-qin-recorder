@@ -45,6 +45,153 @@ class Model(unittest.TestCase):
         self.assertEqual([h["rank"] for h in pred["horses"]], list(range(1, 9)))
         json.dumps(pred)
 
+    def test_chance_of_shortening_and_price_band_are_given_per_horse(self):
+        pred = windrop.predict_windrop(state("5"), "t3")
+        probs = [h["shorten_prob_10pct"] for h in pred["horses"]]
+        self.assertEqual(probs, sorted(probs, reverse=True))
+        for h in pred["horses"]:
+            self.assertTrue(0 < h["shorten_prob_10pct"] < 1 and 0 < h["shorten_prob_any"] < 1)
+            self.assertLess(h["predicted_close_low"], h["predicted_close_odds"])
+            self.assertLess(h["predicted_close_odds"], h["predicted_close_high"])
+        self.assertIn("brier_10pct", windrop.VALIDATION["t3"])
+
+    def test_flag_list_is_every_horse_predicted_at_least_5_percent_shorter_not_a_top_n(self):
+        pred = windrop.predict_windrop(state("5"), "t3")
+        by_row = [h["horse"] for h in pred["horses"] if h["predicted_drop_pct"] >= 5]
+        self.assertEqual(pred["flagged"], by_row)
+        self.assertTrue(all(h["flagged"] == (h["predicted_drop_pct"] >= 5) for h in pred["horses"]))
+        self.assertIn("5", pred["flagged"])
+        self.assertIn("0.95", pred["flag_rule"])
+        self.assertIn("flagged_per_race", pred["flag_validation"])
+        flat = state("5")                                                  # nothing stands out: no horse needs to be flagged
+        flat["points"]["t3"] = qin_board(None)
+        self.assertLessEqual(len(windrop.predict_windrop(flat, "t3")["flagged"]), 3)
+
+    def test_longshots_are_flagged_from_the_quinella_trend_not_from_favourite_ness(self):
+        s = state("8", "t2")
+        s["points"]["t5"] = qin_board(None)                                # before: nothing stands out
+        pred = windrop.predict_longshot(s)
+        self.assertEqual(pred["model"], "windrop_longshot_v1")
+        self.assertTrue(all(h["win_odds"] >= 20 for h in pred["horses"]))
+        self.assertEqual({h["horse"] for h in pred["horses"]}, {"6", "7", "8"})
+        self.assertIn("8", pred["flagged"])
+        self.assertEqual(pred["horses"][0]["horse"], "8")                  # the biggest Quinella drop comes first
+        self.assertNotIn("shorten_prob_10pct", pred["horses"][0])         # a flag only, no price or chance
+        json.dumps(pred)
+        self.assertEqual(windrop.predict_longshot({"points": {}})["error"], "need_t5_t2_quinella_and_t2_win_boards")
+
+    def test_longshot_and_flag_outcomes_count_what_happened(self):
+        s = state("8", "t2")
+        s["points"]["t5"] = qin_board(None)
+        pred = windrop.predict_longshot(s)
+        out = windrop.longshot_outcome(pred, {"after_start": {"odds": {**WIN, "8": 40.0}}})        # 50 -> 40: 8 shortened 20%
+        self.assertEqual((out["flagged_n"], out["flagged_fell_10pct"]), (len(pred["flagged"]), 1))
+        self.assertEqual(windrop.longshot_outcome(pred, {}), {"missing": "no_after_start"})
+        self.assertIsNone(windrop.longshot_outcome(None, {}))
+        main = windrop.predict_windrop(state("5"), "t3")
+        res = windrop.windrop_outcome(main, {"after_start": {"odds": {**WIN, "5": 9.0}}})
+        self.assertGreaterEqual(res["flagged_n"], 1)
+        self.assertGreaterEqual(res["flagged_fell_10pct"], 1)
+        self.assertIn("missed_fell_10pct", res)
+
+    def test_quinella_fly_states_follow_the_share_gap_and_tie_is_never_excluded(self):
+        self.assertEqual([windrop.qin_fly_state(g) for g in (2.0, 0.01, 0.0, -0.3, -1.0, -1.01, -8.0)],
+                         ["fly", "fly", "tie", "tie", "tie", "no_fly", "no_fly"])
+        pred = windrop.predict_windrop(state("5"), "t3")
+        rows = {h["horse"]: h for h in pred["horses"]}
+        for h in rows.values():
+            self.assertAlmostEqual(h["qin_gap_pp"], h["qin_support_pct"] - h["win_implied_pct"], delta=0.02)
+            self.assertEqual(h["qin_fly_state"], windrop.qin_fly_state(h["qin_gap_pp"]))
+            self.assertEqual(set(h["qin_fly_points"]), {"t3"})
+        self.assertEqual(rows["5"]["qin_fly_state"], "fly")
+        groups = [pred["qin_fly"], pred["qin_tie"], pred["qin_no_fly"]]
+        self.assertEqual(sorted(sum(groups, [])), sorted(rows))                        # every horse in exactly one state
+        self.assertTrue(all(rows[h]["qin_gap_pp"] < -1 for h in pred["qin_no_fly"]))   # only the clearly-below horses are excluded
+        self.assertTrue(all(-1 <= rows[h]["qin_gap_pp"] <= 0 for h in pred["qin_tie"]))
+        self.assertIn("qin_fly_validation", pred)
+        json.dumps(pred)
+
+    def test_quinella_fly_is_tracked_across_t5_t3_t2_when_the_earlier_boards_exist(self):
+        s = state("5", "t2")
+        s["points"]["t5"] = qin_board("5")
+        s["points"]["t3"] = qin_board("5")
+        s["win_points"]["t3"] = {"odds": dict(WIN), "observed_at": "x"}
+        pred = windrop.predict_windrop(s, "t2")
+        five = next(h for h in pred["horses"] if h["horse"] == "5")
+        self.assertEqual(set(five["qin_fly_points"]), {"t5", "t3", "t2"})
+        self.assertTrue(five["qin_fly_all_points"])
+        self.assertIn("5", pred["qin_fly"])
+
+    def rising_state(self):
+        s = state("5", "t2")
+        s["points"]["after_rollover"] = qin_board(None)
+        s["points"]["t5"] = qin_board("3")             # horse 3 is the Quinella favourite at t5, horse 5 at t3 and t2
+        s["points"]["t3"] = qin_board("5")
+        s["win_points"]["t3"] = {"odds": dict(WIN), "observed_at": "x"}
+        return s
+
+    def test_quinella_share_path_starts_at_the_previous_payout_and_counts_steps_up(self):
+        pred = windrop.predict_windrop(self.rising_state(), "t2")
+        rows = {h["horse"]: h for h in pred["horses"]}
+        five = rows["5"]
+        self.assertEqual(list(five["qin_pct_path"]), ["after_rollover", "t5", "t3", "t2"])
+        self.assertEqual((five["qin_rise_steps"], five["qin_rise_steps_possible"]), (1, 3))     # down at t5, up at t3, unchanged at t2 (not a rise)
+        self.assertFalse(five["qin_rise_all_steps"])
+        path = five["qin_pct_path"]
+        self.assertAlmostEqual(five["qin_rise_from_rollover_pct"], 100 * (path["t2"] / path["after_rollover"] - 1), delta=0.2)
+        self.assertAlmostEqual(five["qin_rise_from_t5_pct"], 100 * (path["t2"] / path["t5"] - 1), delta=0.2)
+        self.assertGreater(five["qin_rise_from_t5_pct"], 0)
+        self.assertIn("3", pred["qin_fall5_from_t5"])                 # 3 lost far more than 5% of its share from t5 to t2
+        self.assertNotIn("5", pred["qin_fall5_from_t5"])
+        self.assertIn("qin_rise_validation", pred)
+        json.dumps(pred)
+
+    def test_fly_and_rising_marks_only_fly_horses_that_rose_at_every_step(self):
+        s = state("5", "t2")
+        s["points"]["after_rollover"] = qin_board(None)
+        s["points"]["t5"] = qin_board(None)
+        s["points"]["t3"] = qin_board(None)
+        s["win_points"]["t3"] = {"odds": dict(WIN), "observed_at": "x"}
+        # make horse 5's Quinella prices shorten step by step so its share rises at every point
+        for point, factor in (("t5", 0.95), ("t3", 0.90), ("t2", 0.85)):
+            s["points"][point] = {**s["points"][point], "odds": {k: (round(v * factor, 2) if "5" in k.split("-") else v)
+                                                                 for k, v in s["points"][point]["odds"].items()}}
+        pred = windrop.predict_windrop(s, "t2")
+        rows = {h["horse"]: h for h in pred["horses"]}
+        self.assertTrue(rows["5"]["qin_rise_all_steps"])
+        self.assertEqual(rows["5"]["qin_fly_and_rising"], rows["5"]["qin_fly_state"] == "fly")
+        self.assertIn("5", pred["qin_fly_and_rising"] if rows["5"]["qin_fly_state"] == "fly" else ["5"])
+        for h in pred["horses"]:
+            self.assertEqual(h["qin_fly_and_rising"], h["qin_fly_state"] == "fly" and h["qin_rise_all_steps"])
+        self.assertEqual(pred["qin_fly_and_rising"], [h["horse"] for h in pred["horses"] if h["qin_fly_and_rising"]])
+        out = windrop.windrop_outcome(pred, {"after_start": {"odds": dict(WIN)}})
+        self.assertEqual(out["flyrise_n"], len(pred["qin_fly_and_rising"]))
+
+    def test_all_steps_up_needs_the_after_rollover_board(self):
+        s = state("5", "t2")
+        s["points"]["t5"], s["points"]["t3"] = qin_board(None), qin_board(None)
+        s["win_points"]["t3"] = {"odds": dict(WIN), "observed_at": "x"}
+        pred = windrop.predict_windrop(s, "t2")                         # race 1: no after_rollover board
+        for h in pred["horses"]:
+            self.assertFalse(h["qin_rise_all_steps"])
+            self.assertNotIn("qin_rise_from_rollover_pct", h)
+            self.assertEqual(h["qin_rise_steps_possible"], 2)
+        self.assertEqual(pred["qin_rise_all_steps"], [])
+
+    def test_rise_outcome_counts_the_all_steps_up_and_fall_groups(self):
+        pred = windrop.predict_windrop(self.rising_state(), "t2")
+        out = windrop.windrop_outcome(pred, {"after_start": {"odds": {**WIN, "3": 9.0, "5": 9.0}}})
+        self.assertEqual(out["fall5_n"], len(pred["qin_fall5_from_t5"]))
+        self.assertIn("fall5_fell_10pct", out)
+        self.assertIn("rise_all_n", out)
+
+    def test_quinella_fly_outcome_counts_each_group(self):
+        pred = windrop.predict_windrop(state("5"), "t3")
+        out = windrop.windrop_outcome(pred, {"after_start": {"odds": {**WIN, "5": 9.0}}})
+        self.assertEqual(out["fly_n"] + out["tie_n"] + out["nofly_n"], len(pred["horses"]))
+        self.assertGreaterEqual(out["fly_fell_10pct"], 1)
+        self.assertEqual(out["fell_10pct_total"], out["fly_fell_10pct"] + out["tie_fell_10pct"] + out["nofly_fell_10pct"])
+
     def test_prediction_matches_the_documented_formula(self):
         pred = windrop.predict_windrop(state("5"), "t3")
         c = windrop.COEFS["t3"]
@@ -99,7 +246,7 @@ class WindropInMainLoop(unittest.TestCase):
 
     def test_each_race_gets_t5_t3_t2_windrop_files_before_the_race_and_repeats_them_in_its_record(self):
         self.run_main(base.card(3), P1 - M(45), "600")
-        names = [p.rsplit("/", 1)[1] for p in self.files("predictions/") if "-windrop-" in p]
+        names = [p.rsplit("/", 1)[1] for p in self.files("predictions/") if "-windrop-" in p and "-windrop-dbl-" not in p]
         self.assertEqual(names, sorted(f"race-0{i}-windrop-{pt}-600-1.json" for i in (1, 2, 3) for pt in ("t2", "t3", "t5")))
         for point, early, late in (("t5", 6, 4), ("t3", 4, 2), ("t2", 3, 1)):
             for i in (1, 2, 3):
@@ -113,6 +260,11 @@ class WindropInMainLoop(unittest.TestCase):
                 self.assertGreaterEqual(written, post - M(early))
                 self.assertLessEqual(written, post - M(late) + M(1))
                 record = json.loads(base.FakeArchive.files[f"qin-history/2026-11-11_HV/race-0{i}-600-1.json"])
+                self.assertIn("flagged", body["prediction"])
+                self.assertEqual(body["longshot"] is not None, point == "t2")
+                if point == "t2":
+                    self.assertEqual(record["windrop_longshot"], body["longshot"])
+                    self.assertIn("windrop_longshot_outcome", record)
                 self.assertEqual(record["windrop"][point], body["prediction"])
                 self.assertIn(record["windrop_outcome"][point].get("top_hits", "missing"), range(0, 4) if "top_hits" in record["windrop_outcome"][point] else ["missing"])
 
@@ -124,7 +276,7 @@ class WindropInMainLoop(unittest.TestCase):
         finally:
             windrop.predict_windrop = saved
         self.assertEqual(len(self.files("qin-history/")), 3)
-        body = json.loads(base.FakeArchive.files[next(p for p in self.files("predictions/") if "-windrop-" in p)])
+        body = json.loads(base.FakeArchive.files[next(p for p in self.files("predictions/") if "-windrop-" in p and "-windrop-dbl-" not in p)])
         self.assertEqual(body["prediction"]["error"], "ZeroDivisionError")
         self.assertEqual(len([p for p in self.files("predictions/") if "-windrop-" not in p]), 6)
         for path in self.files("qin-history/"):
