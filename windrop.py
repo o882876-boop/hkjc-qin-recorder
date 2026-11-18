@@ -125,3 +125,117 @@ def windrop_outcome(pred, wpts):
             "top_hits": len(set(pred["top"]) & set(actual_top)), "chance_hits": round(TOP * TOP / len(rows), 2),
             "top_shortened_10pct": sum(1 for r in picked if r["actual_drop_pct"] >= 10), "top_n": len(picked),
             "close_log_mae": round(sum(r["abs_log_error"] for r in rows) / len(rows), 3)}
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# windrop_dbl_v1: Double (孖寶) edge, races 2+.
+# The Double of legs (N-1, N) is frozen when race N-1 stops selling. Its price for (a, b) should be about
+# W1(a) x W2(b) (same take-out); dividing by the leg-1 win price after the close gives the leg-2 price the Double
+# bettors had in mind: implied2(b) = mean over leg-1 horses a at 10x or less of DBL(a,b) / W1(a), weighted 1/W1(a).
+# edge(b) = ln(W2(b) / implied2(b)): high = the WIN price is longer than the Double implies -> expected to shorten.
+#   first  race N's first WIN board after race N-1 stopped selling (before_rollover): score = z(edge)
+#   t5, t2 score = z(edge, W2 taken at `first`) + z(Quinella lead at that point)
+# Fitted on 12 races (Sha Tin 2026-11-14 R5,8,9,10; Happy Valley 2026-11-18 R2-9), exploratory.
+# ---------------------------------------------------------------------------------------------------------------
+DBL_MODEL = "windrop_dbl_v1"
+DBL_POINTS = ("first", "t5", "t2")
+DBL_BOARD = {"first": "before_rollover", "t5": "t5", "t2": "t2"}      # race N board each point reads
+LEG1_CAP = 10.0
+DBL_COEFS = {"first": {"c0": -0.1817, "c1": 0.2952},
+             "t5": {"c0": -0.1759, "c1": 0.1647},
+             "t2": {"c0": -0.1765, "c1": 0.1521}}
+DBL_VALIDATION = {
+    "first": {"rank_corr": 0.73, "top3_shortened_10pct": 0.61, "all_runners_shortened_10pct": 0.26,
+              "close_log_mae": 0.238, "baseline_mean_drift_mae": 0.344, "baseline_close_equals_now_mae": 0.387},
+    "t5": {"rank_corr": 0.73, "top3_shortened_10pct": 0.64, "all_runners_shortened_10pct": 0.24,
+           "close_log_mae": 0.227, "baseline_mean_drift_mae": 0.325, "baseline_close_equals_now_mae": 0.375},
+    "t2": {"rank_corr": 0.71, "top3_shortened_10pct": 0.61, "all_runners_shortened_10pct": 0.22,
+           "close_log_mae": 0.219, "baseline_mean_drift_mae": 0.308, "baseline_close_equals_now_mae": 0.356},
+}
+DBL_NOTE = ("Exploratory: 12 races (2 meetings), races 2+ only. Rank correlation, top-3 hit rate and price error are "
+            "leave-one-race-out; the score-to-price mapping is fitted on all 12. About 6 in 10 of the top 3 shortened by "
+            "10% or more (about 1 in 4 of all runners do). A ranking signal, not a betting recommendation.")
+
+
+def dbl_frozen(prev):
+    """Odds of the Double (N-1, N) as frozen when race N-1 stopped selling: last open board, else its t2 board."""
+    d = (prev or {}).get("dbl") or {}
+    board = d.get("last_open") or (d.get("points") or {}).get("t2") or d.get("closed_board")
+    return (board or {}).get("odds") or {}
+
+
+def dbl_edges(w2, w1, frozen, horses):
+    """{horse b: (edge, implied leg-2 price)}; horses without a usable leg-1 partner at 10x or less are left out."""
+    out = {}
+    for b in horses:
+        num = den = 0.0
+        for a, p1 in w1.items():
+            if not p1 or p1 > LEG1_CAP:
+                continue
+            price = frozen.get(f"{a}-{b}")
+            if price and price > 1:
+                num += (1 / p1) * (price / p1)
+                den += 1 / p1
+        if den:
+            implied = num / den
+            out[b] = (math.log(w2[b] / implied), implied)
+    return out
+
+
+def predict_dbl(s, prev, point):
+    """windrop_dbl_v1 for race state `s` (race N) with `prev` the state of race N-1; errors are labelled."""
+    key = DBL_BOARD[point]
+    wpts, pts = s.get("win_points") or {}, s.get("points") or {}
+    w_first = ((wpts.get("before_rollover") or {}).get("odds")) or {}
+    w_now = ((wpts.get(key) or {}).get("odds")) or {}
+    w1 = (((prev or {}).get("win_points") or {}).get("after_start") or {}).get("odds") or {}
+    frozen = dbl_frozen(prev)
+    base = {"model": DBL_MODEL, "at_point": point}
+    if not w1:
+        return {**base, "error": "need_leg1_win_after_start_board"}
+    if not frozen:
+        return {**base, "error": "need_frozen_double_board"}
+    if not w_first or not w_now:
+        return {**base, "error": "need_win_first_board" if not w_first else f"need_win_{key}_board"}
+    use_qin = point != "first"
+    qin_now = (((pts.get(key) or {}).get("odds")) or {}) if use_qin else {}
+    if use_qin and not qin_now:
+        return {**base, "error": f"need_{key}_quinella_board"}
+    shares = qin_shares(qin_now) if use_qin else {}
+    horses = sorted((h for h, o in w_now.items() if o and o > 0 and w_first.get(h) and (not use_qin or h in shares)), key=int)
+    edges = dbl_edges(w_first, w1, frozen, horses)
+    horses = [h for h in horses if h in edges]
+    if len(horses) < MIN_HORSES:
+        return {**base, "error": "too_few_comparable_horses"}
+    z_edge = zscores({h: edges[h][0] for h in horses})
+    lead = z_lead = None
+    if use_qin:
+        total = sum(1 / w_now[h] for h in horses)
+        prob = {h: (1 / w_now[h]) / total for h in horses}
+        lead = {h: shares[h] / prob[h] - 1 for h in horses}
+        z_lead = zscores(lead)
+    c = DBL_COEFS[point]
+    rows = []
+    for h in horses:
+        score = z_edge[h] + (z_lead[h] if z_lead else 0.0)
+        log_drop = c["c0"] + c["c1"] * score
+        rows.append({"horse": h, "score": round(score, 3), "win_odds": w_now[h],
+                     "dbl_implied_win_odds": round(edges[h][1], 1),
+                     "edge_pct": round(100 * (w_first[h] / edges[h][1] - 1), 1),
+                     "lead_pct": round(100 * lead[h], 1) if lead else None,
+                     "predicted_drop_pct": round(100 * (1 - math.exp(-log_drop)), 1),
+                     "predicted_close_odds": round(w_now[h] * math.exp(-log_drop), 1)})
+    top_edge = set(sorted(horses, key=lambda h: -z_edge[h])[:TOP])
+    top_lead = set(sorted(horses, key=lambda h: -z_lead[h])[:TOP]) if z_lead else set()
+    rows.sort(key=lambda r: -r["score"])
+    for rank, row in enumerate(rows, 1):
+        row["rank"] = rank
+        row["signals"] = {"edge_top3": row["horse"] in top_edge, **({"lead_top3": row["horse"] in top_lead} if z_lead else {})}
+        row["signals_fired"] = sum(row["signals"].values())
+    return {**base, "made_at": (pts.get(key) or {}).get("observed_at"), "target_at": (pts.get(key) or {}).get("target_at"),
+            "inputs": ["WIN", "DBL"] + (["QIN"] if z_lead else []), "leg1_cap_odds": LEG1_CAP,
+            "top": [r["horse"] for r in rows[:TOP]],
+            "both_signals": [r["horse"] for r in rows if use_qin and r["signals_fired"] == 2],
+            "horses": rows, "validation": DBL_VALIDATION[point], "note": DBL_NOTE,
+            "meaning": "edge_pct = WIN price at `first` vs the price the frozen Double implies (+ = WIN longer, expected to shorten); "
+                       "predicted_drop_pct > 0 = WIN expected to shorten until the close"}

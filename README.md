@@ -170,3 +170,19 @@ Leave-one-race-out: about 54% of the top three shortened by 10% or more (about 2
 of the predicted close price is about 20-25% (mean |ln error| 0.225 at t2 against 0.264 for favourite-ness alone and 0.346
 for "close = now"). A ranking signal, not a betting recommendation. Refit the coefficients as more race days are stored;
 `windrop_outcome` in each race record is the out-of-sample check.
+
+## windrop_dbl_v1: Double (孖寶) early prediction, races 2+
+
+The Double of legs (N-1, N) is frozen when race N-1 stops selling. Its price for (a, b) should be about W1(a) x W2(b), where
+W1 is race N-1's WIN price after the close. Dividing by W1 gives the race-N price the Double bettors had in mind
+(`dbl_implied_win_odds`, weighted over leg-1 horses at 10x or less). `edge_pct` is how much longer the WIN price is than that;
+long = expected to shorten. Written per race 2+ at three points as
+`predictions/<date>_<venue>/race-NN-windrop-dbl-<first|t5|t2>-<run>.json` and repeated in the race record
+(`windrop_dbl`, `windrop_dbl_outcome`):
+
+- `first` - race N's first WIN board after race N-1 stopped selling (about 30 minutes before race N): score = edge only.
+- `t5`, `t2` - edge (WIN at `first`) plus the Quinella lead at that point. `both_signals` lists horses in the top 3 on both.
+
+Each row has `predicted_drop_pct` and `predicted_close_odds`. Fitted on 12 races (Sha Tin 2026-11-14, Happy Valley 2026-11-18);
+leave-one-race-out: about 6 in 10 of the top 3 shortened by 10% or more (about 1 in 4 of all runners do), price error (mean |ln|)
+0.22-0.24 against 0.31-0.34 for the average drift alone. Exploratory, a ranking signal and not a betting recommendation.

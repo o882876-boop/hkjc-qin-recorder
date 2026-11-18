@@ -99,7 +99,7 @@ class WindropInMainLoop(unittest.TestCase):
 
     def test_each_race_gets_t5_t3_t2_windrop_files_before_the_race_and_repeats_them_in_its_record(self):
         self.run_main(base.card(3), P1 - M(45), "600")
-        names = [p.rsplit("/", 1)[1] for p in self.files("predictions/") if "-windrop-" in p]
+        names = [p.rsplit("/", 1)[1] for p in self.files("predictions/") if "-windrop-" in p and "-windrop-dbl-" not in p]
         self.assertEqual(names, sorted(f"race-0{i}-windrop-{pt}-600-1.json" for i in (1, 2, 3) for pt in ("t2", "t3", "t5")))
         for point, early, late in (("t5", 6, 4), ("t3", 4, 2), ("t2", 3, 1)):
             for i in (1, 2, 3):
@@ -124,7 +124,7 @@ class WindropInMainLoop(unittest.TestCase):
         finally:
             windrop.predict_windrop = saved
         self.assertEqual(len(self.files("qin-history/")), 3)
-        body = json.loads(base.FakeArchive.files[next(p for p in self.files("predictions/") if "-windrop-" in p)])
+        body = json.loads(base.FakeArchive.files[next(p for p in self.files("predictions/") if "-windrop-" in p and "-windrop-dbl-" not in p)])
         self.assertEqual(body["prediction"]["error"], "ZeroDivisionError")
         self.assertEqual(len([p for p in self.files("predictions/") if "-windrop-" not in p]), 6)
         for path in self.files("qin-history/"):
