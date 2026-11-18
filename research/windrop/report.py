@@ -34,7 +34,7 @@ def aggregate(records):
                 t["horses"] += horses
                 for k in ("flagged_n", "flagged_fell_any", "flagged_fell_10pct", "missed_fell_10pct"):
                     t[k] += out.get(k, 0)
-                for k in ("rise_all_n", "rise_all_fell_10pct", "fall5_n", "fall5_fell_10pct"):
+                for k in ("rise_all_n", "rise_all_fell_10pct", "fall5_n", "fall5_fell_10pct", "flyrise_n", "flyrise_fell_10pct"):
                     t[k] += out.get(k, 0)
                 for k in ("fly_n", "fly_fell_10pct", "tie_n", "tie_fell_10pct", "nofly_n", "nofly_fell_10pct", "fell_10pct_total"):
                     t[k] += out.get(k, 0)
@@ -93,14 +93,16 @@ def render(records):
     for key, _, title, points in FAMILIES:
         for point in points:
             t = totals.get((key, point))
-            if not t or not (t["rise_all_n"] or t["fall5_n"]):
+            if not t or not (t["rise_all_n"] or t["fall5_n"] or t["flyrise_n"]):
                 continue
             pct = lambda a, b: f"{100 * a / b:.0f}% ({int(a)}/{int(b)})" if b else "-"
-            rise_lines.append(f"| {title} | {point} | {pct(t['rise_all_fell_10pct'], t['rise_all_n'])} | {pct(t['fall5_fell_10pct'], t['fall5_n'])} |")
+            rise_lines.append(f"| {title} | {point} | {pct(t['rise_all_fell_10pct'], t['rise_all_n'])} | {pct(t['flyrise_fell_10pct'], t['flyrise_n'])} | "
+                              f"{pct(t['fall5_fell_10pct'], t['fall5_n'])} |")
     if rise_lines:
         lines += ["", "Quinella share path from the previous payout: horses whose share went up at every step (after_rollover -> t5 -> t3 -> t2) "
-                      "and, at t2, horses whose share fell 5%+ from t5 (exclusion reference). Validated: all steps up 23%, down 5%+ 0 of 17.", "",
-                  "| prediction | point | all steps up: fell 10%+ | down 5%+ from t5: fell 10%+ |", "|---|---|---|---|"] + rise_lines
+                      "fly + every step up, and, at t2, horses whose share fell 5%+ from t5 (exclusion reference). Validated: all steps up 23%, "
+                      "fly + every step up 35% (31 horses, fly alone 33%), down 5%+ 0 of 17.", "",
+                  "| prediction | point | all steps up: fell 10%+ | fly + all steps up: fell 10%+ | down 5%+ from t5: fell 10%+ |", "|---|---|---|---|---|"] + rise_lines
     if ls:
         lines += ["", f"Longshots (>= 20x at t2), {int(ls['races'])} races: flagged {int(ls['flagged'])} -> {int(ls['flagged_fell'])} shortened 10%+; "
                       f"not flagged {int(ls['other'])} -> {int(ls['other_fell'])} (validated: 13 -> 4, 61 -> 0)."]

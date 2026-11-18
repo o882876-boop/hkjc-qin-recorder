@@ -218,3 +218,5 @@ filter, not a pick. See docs/WINDROP.md.
 Rows also carry the Quinella-pool share path after_rollover -> t5 -> t3 -> t2 (`qin_pct_path`, `qin_rise_from_rollover_pct`, `qin_rise_from_t5_pct`,
 `qin_rise_steps`, `qin_rise_all_steps`) and, at t2, `qin_fall5_from_t5`: horses whose share fell 5%+ from t5 (0 of 17 shortened 10%+). Rising at every step is only
 a weak helper on top of qin fly (fly + every step up 35% of 31; no fly + every step up 5%). See docs/WINDROP.md.
+
+`qin_fly_and_rising` lists the horses that are qin fly now and rose at every step from the previous payout (35% of 31 shortened 10%+, fly alone 33%).

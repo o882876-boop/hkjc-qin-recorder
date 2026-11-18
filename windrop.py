@@ -257,6 +257,16 @@ def qin_share_path(s, upto):
     return out
 
 
+def add_fly_and_rising(rows):
+    """Mark rows that are qin fly now AND whose share went up at every step from the previous payout; returns those horses."""
+    out = []
+    for row in rows:
+        row["qin_fly_and_rising"] = row.get("qin_fly_state") == "fly" and bool(row.get("qin_rise_all_steps"))
+        if row["qin_fly_and_rising"]:
+            out.append(row["horse"])
+    return out
+
+
 def add_qin_rise(s, point, rows):
     """Add the Quinella share path fields to prediction rows; returns the prediction-level lists."""
     path = qin_share_path(s, point)
@@ -343,6 +353,7 @@ def predict_windrop(s, point):
         row["rank"] = rank
     flagged = flag_rows(rows)
     fly = {**qin_fly_fields(add_qin_fly(s, point, rows), point), **add_qin_rise(s, point, rows)}
+    fly["qin_fly_and_rising"] = add_fly_and_rising(rows)
     return {"model": MODEL, "at_point": point, "made_at": (pts.get(point) or {}).get("observed_at"), **fly,
             "target_at": (pts.get(point) or {}).get("target_at"),
             "inputs": ["WIN", "QIN"], "top": [r["horse"] for r in rows[:TOP]], "horses": rows,
@@ -367,7 +378,7 @@ def _flag_outcome(pred, rows):
             fly[f"{name}_n"] = len(group)
             fly[f"{name}_fell_10pct"] = sum(r["actual_drop_pct"] >= 10 for r in group)
         fly["fell_10pct_total"] = sum(r["actual_drop_pct"] >= 10 for r in rows)
-        for name, key in (("rise_all", "qin_rise_all_steps"), ("fall5", "qin_fall5_from_t5")):
+        for name, key in (("rise_all", "qin_rise_all_steps"), ("fall5", "qin_fall5_from_t5"), ("flyrise", "qin_fly_and_rising")):
             if key in pred:
                 group = [r for r in rows if r["horse"] in set(pred.get(key) or [])]
                 fly[f"{name}_n"] = len(group)
@@ -519,6 +530,8 @@ def predict_dbl(s, prev, point, combined=False):
     flagged = flag_rows(rows)
     fly = ({**qin_fly_fields(add_qin_fly(s, point, rows), point), **add_qin_rise(s, point, rows)}
            if point in DBL_COMBINED_POINTS else {})
+    if fly:
+        fly["qin_fly_and_rising"] = add_fly_and_rising(rows)
     return {**base, **fly, "flagged": flagged, "flag_rule": FLAG_RULE,
             "flag_validation": FLAG_VALIDATION["combined" if combined else "dbl"][point], "made_at": (pts.get(key) or {}).get("observed_at"), "target_at": (pts.get(key) or {}).get("target_at"),
             "inputs": ["WIN", "DBL"] + (["QIN"] if combined else []), "leg1_cap_odds": LEG1_CAP,

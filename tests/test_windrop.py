@@ -146,6 +146,27 @@ class Model(unittest.TestCase):
         self.assertIn("qin_rise_validation", pred)
         json.dumps(pred)
 
+    def test_fly_and_rising_marks_only_fly_horses_that_rose_at_every_step(self):
+        s = state("5", "t2")
+        s["points"]["after_rollover"] = qin_board(None)
+        s["points"]["t5"] = qin_board(None)
+        s["points"]["t3"] = qin_board(None)
+        s["win_points"]["t3"] = {"odds": dict(WIN), "observed_at": "x"}
+        # make horse 5's Quinella prices shorten step by step so its share rises at every point
+        for point, factor in (("t5", 0.95), ("t3", 0.90), ("t2", 0.85)):
+            s["points"][point] = {**s["points"][point], "odds": {k: (round(v * factor, 2) if "5" in k.split("-") else v)
+                                                                 for k, v in s["points"][point]["odds"].items()}}
+        pred = windrop.predict_windrop(s, "t2")
+        rows = {h["horse"]: h for h in pred["horses"]}
+        self.assertTrue(rows["5"]["qin_rise_all_steps"])
+        self.assertEqual(rows["5"]["qin_fly_and_rising"], rows["5"]["qin_fly_state"] == "fly")
+        self.assertIn("5", pred["qin_fly_and_rising"] if rows["5"]["qin_fly_state"] == "fly" else ["5"])
+        for h in pred["horses"]:
+            self.assertEqual(h["qin_fly_and_rising"], h["qin_fly_state"] == "fly" and h["qin_rise_all_steps"])
+        self.assertEqual(pred["qin_fly_and_rising"], [h["horse"] for h in pred["horses"] if h["qin_fly_and_rising"]])
+        out = windrop.windrop_outcome(pred, {"after_start": {"odds": dict(WIN)}})
+        self.assertEqual(out["flyrise_n"], len(pred["qin_fly_and_rising"]))
+
     def test_all_steps_up_needs_the_after_rollover_board(self):
         s = state("5", "t2")
         s["points"]["t5"], s["points"]["t3"] = qin_board(None), qin_board(None)

@@ -79,6 +79,9 @@ race 1 has no `after_rollover` board): `qin_pct_path`, `qin_rise_from_rollover_p
 | fly, rise from after_rollover 5-10% / 10%+ / falling | 14 / 35 / 36 | 43% / 40% / 22% |
 | t5 -> t2 share down 5%+ (all 204 runners) | 17 | **0** |
 
+`qin_fly_and_rising` (row flag and prediction list) marks the horses that are qin fly now **and** went up at every step (31 horses, 35% shortened 10%+, against 33% for fly alone); the
+race record scores it as `flyrise_n` / `flyrise_fell_10pct` and the scorecard prints it.
+
 A **weak helper** on top of the fly state, not a signal of its own (no fly + rising = 5%). The after_rollover board is thin (the step to t5 is noise: 18-20% either
 way), so t5 -> t2 is the cleaner part; its mirror, share down 5%+ from t5 to t2, is the only usable exclusion reference (`qin_fall5_from_t5`, 0 of 17).
 Plain counts, no fitted parameter; `backtest.py` prints them.
