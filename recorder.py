@@ -906,11 +906,15 @@ class Recorder:
                         ready = ready and bool((s.get("points") or {}).get(board_name))
                     if not ready and at - stamp(board["observed_at"]) < (DBL_FIRST_WAIT if point == "first" else PREDICT_WIN_WAIT):
                         continue
-                    try:
-                        s[key] = windrop.predict_dbl(s, prev, point)
-                    except Exception as error:  # noqa: BLE001 - a prediction bug must never stop the recorder
-                        s[key] = {"model": windrop.DBL_MODEL, "at_point": point, "error": type(error).__name__}
-                        log(f"R{n} {point} windrop_dbl skipped ({type(error).__name__})")
+                    for name, combined in ((key, False), (f"windrop_combo_{point}", True)):
+                        if combined and point not in windrop.DBL_COMBINED_POINTS:
+                            continue
+                        try:
+                            s[name] = windrop.predict_dbl(s, prev, point, combined=combined)
+                        except Exception as error:  # noqa: BLE001 - a prediction bug must never stop the recorder
+                            s[name] = {"model": windrop.DBL_MODEL + ("_combined" if combined else ""), "at_point": point,
+                                       "error": type(error).__name__}
+                            log(f"R{n} {point} windrop_dbl{' combined' if combined else ''} skipped ({type(error).__name__})")
                 due.append((n, point))
         return due
 
@@ -1024,6 +1028,12 @@ class Recorder:
                 windrop_dbl_outcomes[point] = windrop.windrop_outcome(s.get(f"windrop_dbl_{point}"), win_points)
             except Exception as error:  # noqa: BLE001
                 windrop_dbl_outcomes[point] = {"error": type(error).__name__}
+        windrop_combo_outcomes = {}
+        for point in windrop.DBL_COMBINED_POINTS:
+            try:
+                windrop_combo_outcomes[point] = windrop.windrop_outcome(s.get(f"windrop_combo_{point}"), win_points)
+            except Exception as error:  # noqa: BLE001
+                windrop_combo_outcomes[point] = {"error": type(error).__name__}
         iso = lambda t: t.isoformat() if isinstance(t, datetime) else None
         return {"schema": 2, "date": day, "venue": venue, "meeting_id": meeting_id, "race": n,
                 "post_time": iso(s.get("post")), "rollover_from_race": rollover_from,
@@ -1040,6 +1050,8 @@ class Recorder:
                 "windrop_outcome": windrop_outcomes,
                 "windrop_dbl": {p: s.get(f"windrop_dbl_{p}") for p in windrop.DBL_POINTS},
                 "windrop_dbl_outcome": windrop_dbl_outcomes,
+                "windrop_combined": {p: s.get(f"windrop_combo_{p}") for p in windrop.DBL_COMBINED_POINTS},
+                "windrop_combined_outcome": windrop_combo_outcomes,
                 "win_points": win_points, "win_missing": win_missing, "win_superseded": s.get("win_superseded", []),
                 "superseded": s.get("superseded", []),
                 "suspensions": s.get("suspensions", []), "combinations": rows, "win_runners": win_rows}
@@ -1153,7 +1165,7 @@ def publish_windrops_dbl(recorder, archive, day, venue, meeting_id):
         try:
             body = {"schema": 1, "date": day, "venue": venue, "meeting_id": meeting_id, "race": n, "point": point,
                     "kind": "windrop_dbl", "post_time": s["post"].isoformat() if s.get("post") else None,
-                    "prediction": pred, "written_at": now().isoformat()}
+                    "prediction": pred, "combined": s.get(f"windrop_combo_{point}"), "written_at": now().isoformat()}
             if archive.put(f"{prediction_folder(day, venue)}/race-{n:02}-windrop-dbl-{point}-{archive.run}.json", body,
                            f"Windrop DBL prediction R{n} at {point}"):
                 s[f"windrop_dbl_{point}_published"] = True

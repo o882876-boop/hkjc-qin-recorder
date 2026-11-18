@@ -59,23 +59,40 @@ class Model(unittest.TestCase):
         self.assertAlmostEqual(row["edge_pct"], 50.0, places=0)
         self.assertGreater(row["predicted_drop_pct"], 0)
         self.assertLess(row["predicted_close_odds"], row["win_odds"])
-        self.assertEqual(pred["both_signals"], [])                       # no Quinella signal at `first`
-        c = windrop.DBL_COEFS["first"]
+        self.assertEqual(pred["both_signals"], [])                       # the Double-only prediction has no Quinella signal
+        c = windrop.PROB["dbl"]["first"]
         self.assertAlmostEqual(row["predicted_close_odds"], round(row["win_odds"] * math.exp(-(c["c0"] + c["c1"] * row["score"])), 1), places=1)
         json.dumps(pred)
 
-    def test_t5_and_t2_add_the_quinella_lead_and_flag_horses_with_both_signals(self):
+    def test_chance_of_shortening_and_the_price_band_follow_the_score(self):
+        s, prev = pair()
+        rows = windrop.predict_dbl(s, prev, "first")["horses"]
+        probs = [r["shorten_prob_10pct"] for r in rows]
+        self.assertEqual(probs, sorted(probs, reverse=True))              # higher score, higher chance
+        for r in rows:
+            self.assertTrue(0 < r["shorten_prob_10pct"] < 1 and 0 < r["shorten_prob_any"] < 1)
+            self.assertGreaterEqual(r["shorten_prob_any"], r["shorten_prob_10pct"] - 0.5)
+            self.assertLess(r["predicted_close_low"], r["predicted_close_odds"])
+            self.assertLess(r["predicted_close_odds"], r["predicted_close_high"])
+        c = windrop.PROB["dbl"]["first"]
+        self.assertAlmostEqual(rows[0]["shorten_prob_10pct"], round(1 / (1 + math.exp(-(c["a10"] + c["b10"] * rows[0]["score"]))), 3))
+
+    def test_combined_adds_the_quinella_lead_and_flags_horses_with_both_signals(self):
         for point in ("t5", "t2"):
             s, prev = pair("5")
-            pred = windrop.predict_dbl(s, prev, point)
-            self.assertEqual(pred["inputs"], ["WIN", "DBL", "QIN"])
+            double_only = windrop.predict_dbl(s, prev, point)
+            self.assertEqual(double_only["inputs"], ["WIN", "DBL"])
+            self.assertNotIn("signals", double_only["horses"][0])
+            pred = windrop.predict_dbl(s, prev, point, combined=True)
+            self.assertEqual((pred["model"], pred["inputs"]), ("windrop_dbl_v1_combined", ["WIN", "DBL", "QIN"]))
             self.assertEqual(pred["horses"][0]["horse"], "5")
             self.assertIn("5", pred["both_signals"])
             self.assertEqual(pred["horses"][0]["signals_fired"], 2)
             self.assertGreater(pred["horses"][0]["lead_pct"], 20)
         s, prev = pair("2")                                              # Quinella likes 2, the Double likes 5
-        row = {h["horse"]: h for h in windrop.predict_dbl(s, prev, "t2")["horses"]}
+        row = {h["horse"]: h for h in windrop.predict_dbl(s, prev, "t2", combined=True)["horses"]}
         self.assertEqual((row["5"]["signals_fired"], row["2"]["signals_fired"]), (1, 1))
+        self.assertEqual(windrop.predict_dbl(s, prev, "first", combined=True)["error"], "combined_needs_t5_or_t2")
 
     def test_leg1_horses_above_ten_times_are_ignored(self):
         s, prev = pair()
@@ -98,7 +115,8 @@ class Model(unittest.TestCase):
         self.assertEqual(windrop.predict_dbl(s, prev, "first")["error"], "need_win_first_board")
         s, prev = pair()
         s["points"].pop("t2")
-        self.assertEqual(windrop.predict_dbl(s, prev, "t2")["error"], "need_t2_quinella_board")
+        self.assertEqual(windrop.predict_dbl(s, prev, "t2", combined=True)["error"], "need_t2_quinella_board")
+        self.assertNotIn("error", windrop.predict_dbl(s, prev, "t2"))      # the Double-only prediction does not need it
         s, prev = pair(dbl={k: v for k, v in frozen().items() if k.endswith(("-1", "-2", "-3"))})
         self.assertEqual(windrop.predict_dbl(s, prev, "first")["error"], "too_few_comparable_horses")
 
@@ -118,6 +136,11 @@ class Model(unittest.TestCase):
         out = windrop.windrop_outcome(pred, {"after_start": {"odds": {**W2, "5": 9.0}}})
         self.assertIn("5", out["actual_top"])
         self.assertEqual(out["top_n"], 3)
+        five = next(r for r in out["horses"] if r["horse"] == "5")
+        self.assertTrue(five["shortened_10pct"])
+        self.assertGreater(five["shorten_prob_10pct"], 0)
+        self.assertIn("brier_10pct", out)
+        self.assertGreaterEqual(out["in_50pct_band"], 0)
 
 
 class InRecorder(unittest.TestCase):
@@ -171,6 +194,14 @@ class InMainLoop(unittest.TestCase):
                 record = json.loads(base.FakeArchive.files[f"qin-history/2026-11-11_HV/race-0{i}-700-1.json"])
                 self.assertEqual(record["windrop_dbl"][point], body["prediction"])
                 self.assertIn("windrop_dbl_outcome", record)
+                self.assertIn("shorten_prob_10pct", body["prediction"]["horses"][0])
+                if point == "first":
+                    self.assertIsNone(body["combined"])
+                else:
+                    self.assertEqual(body["combined"]["model"], "windrop_dbl_v1_combined")
+                    self.assertNotIn("error", body["combined"])
+                    self.assertEqual(record["windrop_combined"][point], body["combined"])
+                    self.assertIn("windrop_combined_outcome", record)
         record1 = json.loads(base.FakeArchive.files["qin-history/2026-11-11_HV/race-01-700-1.json"])
         self.assertEqual(set(record1["windrop_dbl"].values()), {None})
 

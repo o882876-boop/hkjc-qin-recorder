@@ -171,18 +171,27 @@ of the predicted close price is about 20-25% (mean |ln error| 0.225 at t2 agains
 for "close = now"). A ranking signal, not a betting recommendation. Refit the coefficients as more race days are stored;
 `windrop_outcome` in each race record is the out-of-sample check.
 
-## windrop_dbl_v1: Double (孖寶) early prediction, races 2+
+## windrop_dbl_v1: Double (孖寶) prediction, and the chance of shortening (races 2+)
+
+Three separate predictions, each with the chance that the WIN price ends **10% or more shorter** (`shorten_prob_10pct`) or
+shorter at all (`shorten_prob_any`), and a predicted close price with a 50% band (`predicted_close_odds`,
+`predicted_close_low` .. `predicted_close_high`):
+
+- **Quinella** - `windrop_v1`, at t5, t3, t2 (above).
+- **Double** - `windrop_dbl_v1`, at `first`, t5, t2: score = edge only.
+- **Combined** - `windrop_dbl_v1_combined`, at t5, t2: edge plus the Quinella lead (the best calibrated of the three).
 
 The Double of legs (N-1, N) is frozen when race N-1 stops selling. Its price for (a, b) should be about W1(a) x W2(b), where
 W1 is race N-1's WIN price after the close. Dividing by W1 gives the race-N price the Double bettors had in mind
 (`dbl_implied_win_odds`, weighted over leg-1 horses at 10x or less). `edge_pct` is how much longer the WIN price is than that;
-long = expected to shorten. Written per race 2+ at three points as
-`predictions/<date>_<venue>/race-NN-windrop-dbl-<first|t5|t2>-<run>.json` and repeated in the race record
-(`windrop_dbl`, `windrop_dbl_outcome`):
+long = expected to shorten. `first` is race N's first WIN board after race N-1 stopped selling (about 30 minutes before race N).
 
-- `first` - race N's first WIN board after race N-1 stopped selling (about 30 minutes before race N): score = edge only.
-- `t5`, `t2` - edge (WIN at `first`) plus the Quinella lead at that point. `both_signals` lists horses in the top 3 on both.
+Written per race 2+ as `predictions/<date>_<venue>/race-NN-windrop-dbl-<first|t5|t2>-<run>.json` (`prediction` = Double,
+`combined` = Double + Quinella, null at `first`) and repeated in the race record (`windrop_dbl`, `windrop_combined` and their
+`*_outcome`, which score each chance with a Brier value and count the horses inside the 50% band).
 
-Each row has `predicted_drop_pct` and `predicted_close_odds`. Fitted on 12 races (Sha Tin 2026-11-14, Happy Valley 2026-11-18);
-leave-one-race-out: about 6 in 10 of the top 3 shortened by 10% or more (about 1 in 4 of all runners do), price error (mean |ln|)
-0.22-0.24 against 0.31-0.34 for the average drift alone. Exploratory, a ranking signal and not a betting recommendation.
+Fitted on 12 races (Sha Tin 2026-11-14, Happy Valley 2026-11-18), 16 for the Quinella model; checked leave-one-race-out. The
+chances are calibrated: horses given 60%+ shortened 10%+ about 3 times in 4, horses given under 15% about 1 time in 20, and the
+50% band holds the close price about half the time. Brier score of the 10% chance (lower is better, base rate alone in brackets):
+Double 0.107-0.126 (0.17-0.19), combined 0.099-0.105 (0.17-0.18), Quinella 0.112-0.131 (0.16-0.18). Exploratory, two
+meetings: a ranking and a chance, not a betting recommendation; refit as more race days are stored.

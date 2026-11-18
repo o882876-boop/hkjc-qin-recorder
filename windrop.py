@@ -29,11 +29,14 @@ COEFS = {
 # average drift only / favourite-ness only. Out-of-sample means each race was predicted from the other 15.
 VALIDATION = {
     "t5": {"rank_corr": 0.62, "top3_shortened_10pct": 0.56, "close_log_mae": 0.252,
-           "baseline_mean_drift_mae": 0.318, "baseline_favourite_only_mae": 0.286},
+           "baseline_mean_drift_mae": 0.318, "baseline_favourite_only_mae": 0.286,
+           "brier_10pct": 0.131, "brier_base_rate_only": 0.175, "top3_mean_predicted_prob": 0.55, "interval50_coverage": 0.50},
     "t3": {"rank_corr": 0.65, "top3_shortened_10pct": 0.54, "close_log_mae": 0.236,
-           "baseline_mean_drift_mae": 0.309, "baseline_favourite_only_mae": 0.273},
+           "baseline_mean_drift_mae": 0.309, "baseline_favourite_only_mae": 0.273,
+           "brier_10pct": 0.120, "brier_base_rate_only": 0.163, "top3_mean_predicted_prob": 0.54, "interval50_coverage": 0.50},
     "t2": {"rank_corr": 0.65, "top3_shortened_10pct": 0.54, "close_log_mae": 0.225,
-           "baseline_mean_drift_mae": 0.301, "baseline_favourite_only_mae": 0.264},
+           "baseline_mean_drift_mae": 0.301, "baseline_favourite_only_mae": 0.264,
+           "brier_10pct": 0.112, "brier_base_rate_only": 0.163, "top3_mean_predicted_prob": 0.56, "interval50_coverage": 0.49},
 }
 NOTE = ("Exploratory: fitted on 2 race days (16 races). Out-of-sample about 54% of the top 3 shortened by 10% or more "
         "(about 21% of all runners do). Typical error of the predicted close price is about 20-25%. "
@@ -58,6 +61,115 @@ def zscores(values):
     mean = sum(xs) / len(xs)
     sd = (sum((x - mean) ** 2 for x in xs) / len(xs)) ** 0.5
     return {k: ((v - mean) / sd if sd > 1e-12 else 0.0) for k, v in values.items()}
+
+
+# Score -> chance and price. P(WIN shortens by 10% or more) and P(shortens at all) are logistic in the score; the price is
+# now x exp(-(c0 + c1 x score)) with the 25%-75% band of the fit residuals around it. Fitted in-sample on the same races
+# as the scores (QIN 16 races, DBL and combined 12); a..b = chance, c = price, r25/r75 = ln residual quartiles.
+PROB = {
+ "qin": {
+  "t5": {
+   "c0": -0.18838143,
+   "c1": 0.39392643,
+   "a10": -1.781,
+   "b10": 2.516,
+   "a0": -1.651,
+   "b0": 2.788,
+   "r25": -0.234,
+   "r75": 0.181
+  },
+  "t3": {
+   "c0": -0.18906973,
+   "c1": 0.3667033,
+   "a10": -2.068,
+   "b10": 2.699,
+   "a0": -1.427,
+   "b0": 2.515,
+   "r25": -0.192,
+   "r75": 0.173
+  },
+  "t2": {
+   "c0": -0.1833911,
+   "c1": 0.35486005,
+   "a10": -2.193,
+   "b10": 2.931,
+   "a0": -1.416,
+   "b0": 2.548,
+   "r25": -0.181,
+   "r75": 0.165
+  }
+ },
+ "dbl": {
+  "first": {
+   "c0": -0.1817,
+   "c1": 0.2952,
+   "a10": -1.74,
+   "b10": 1.944,
+   "a0": -1.523,
+   "b0": 2.231,
+   "r25": -0.22,
+   "r75": 0.176
+  },
+  "t5": {
+   "c0": -0.1759,
+   "c1": 0.2814,
+   "a10": -2.075,
+   "b10": 2.235,
+   "a0": -1.896,
+   "b0": 2.534,
+   "r25": -0.186,
+   "r75": 0.166
+  },
+  "t2": {
+   "c0": -0.1765,
+   "c1": 0.2622,
+   "a10": -2.335,
+   "b10": 2.356,
+   "a0": -1.388,
+   "b0": 1.835,
+   "r25": -0.184,
+   "r75": 0.173
+  }
+ },
+ "combined": {
+  "t5": {
+   "c0": -0.1759,
+   "c1": 0.1647,
+   "a10": -2.104,
+   "b10": 1.377,
+   "a0": -1.847,
+   "b0": 1.516,
+   "r25": -0.17,
+   "r75": 0.181
+  },
+  "t2": {
+   "c0": -0.1765,
+   "c1": 0.1521,
+   "a10": -2.384,
+   "b10": 1.441,
+   "a0": -1.342,
+   "b0": 1.057,
+   "r25": -0.175,
+   "r75": 0.18
+  }
+ }
+}
+
+
+def _sigmoid(x):
+    return 1 / (1 + math.exp(-x))
+
+
+def price_block(w_now, score, params):
+    """Chances of shortening and the predicted close price with a 50% band, for one horse."""
+    log_drop = params["c0"] + params["c1"] * score
+    return {"shorten_prob_10pct": round(_sigmoid(params["a10"] + params["b10"] * score), 3),
+            "shorten_prob_any": round(_sigmoid(params["a0"] + params["b0"] * score), 3),
+            "predicted_drop_pct": round(100 * (1 - math.exp(-log_drop)), 1),
+            "predicted_close_odds": round(w_now * math.exp(-log_drop), 1),
+            "predicted_close_low": round(w_now * math.exp(-(log_drop + params["r75"])), 1),
+            "predicted_close_high": round(w_now * math.exp(-(log_drop + params["r25"])), 1)}
+
 
 
 def predict_windrop(s, point):
@@ -85,13 +197,11 @@ def predict_windrop(s, point):
     rows = []
     for h in horses:
         score = sum(c[name] * feats[name][h] for name in feats)
-        log_drop = c["c0"] + c["c1"] * score
         rows.append({"horse": h, "score": round(score, 3), "win_odds": w_now[h],
                      "win_implied_pct": round(100 * prob[h], 2), "qin_support_pct": round(100 * shares[h], 2),
                      "lead_pct": round(100 * (shares[h] / prob[h] - 1), 1),
                      "win_move_pct_t5_to_now": round(100 * (w_t5[h] - w_now[h]) / w_t5[h], 1) if need_t5 else None,
-                     "predicted_drop_pct": round(100 * (1 - math.exp(-log_drop)), 1),
-                     "predicted_close_odds": round(w_now[h] * math.exp(-log_drop), 1)})
+                     **price_block(w_now[h], score, PROB["qin"][point])})
     rows.sort(key=lambda r: -r["score"])
     for rank, row in enumerate(rows, 1):
         row["rank"] = rank
@@ -99,8 +209,9 @@ def predict_windrop(s, point):
             "target_at": (pts.get(point) or {}).get("target_at"),
             "inputs": ["WIN", "QIN"], "top": [r["horse"] for r in rows[:TOP]], "horses": rows,
             "validation": VALIDATION[point], "note": NOTE,
-            "meaning": "predicted_drop_pct > 0 = WIN price expected to shorten until the close; "
-                       "predicted_close_odds = win odds now x exp(-(c0 + c1 x score))"}
+            "meaning": "shorten_prob_10pct = chance the WIN price ends 10% or more shorter than now, shorten_prob_any = chance it ends "
+                       "shorter at all; predicted_close_odds = win odds now x exp(-(c0 + c1 x score)) with a 50% band "
+                       "(predicted_close_low..high); predicted_drop_pct > 0 = expected to shorten"}
 
 
 def windrop_outcome(pred, wpts):
@@ -114,9 +225,14 @@ def windrop_outcome(pred, wpts):
     for h in pred["horses"]:
         close = final.get(h["horse"])
         if close and h["win_odds"]:
-            rows.append({"horse": h["horse"], "predicted_close": h["predicted_close_odds"], "actual_close": close,
-                         "actual_drop_pct": round(100 * (h["win_odds"] - close) / h["win_odds"], 1),
-                         "abs_log_error": round(abs(math.log(h["predicted_close_odds"] / close)), 3)})
+            drop = round(100 * (h["win_odds"] - close) / h["win_odds"], 1)
+            row = {"horse": h["horse"], "predicted_close": h["predicted_close_odds"], "actual_close": close,
+                   "actual_drop_pct": drop, "abs_log_error": round(abs(math.log(h["predicted_close_odds"] / close)), 3)}
+            if h.get("shorten_prob_10pct") is not None:
+                row["shorten_prob_10pct"] = h["shorten_prob_10pct"]
+                row["shortened_10pct"] = drop >= 10
+                row["in_50pct_band"] = h["predicted_close_low"] <= close <= h["predicted_close_high"]
+            rows.append(row)
     if len(rows) < MIN_HORSES:
         return {"missing": "too_few_after_start_prices"}
     actual_top = [r["horse"] for r in sorted(rows, key=lambda r: -r["actual_drop_pct"])[:TOP]]
@@ -124,7 +240,9 @@ def windrop_outcome(pred, wpts):
     return {"horses": rows, "actual_top": actual_top,
             "top_hits": len(set(pred["top"]) & set(actual_top)), "chance_hits": round(TOP * TOP / len(rows), 2),
             "top_shortened_10pct": sum(1 for r in picked if r["actual_drop_pct"] >= 10), "top_n": len(picked),
-            "close_log_mae": round(sum(r["abs_log_error"] for r in rows) / len(rows), 3)}
+            "close_log_mae": round(sum(r["abs_log_error"] for r in rows) / len(rows), 3),
+            **({"brier_10pct": round(sum((r["shorten_prob_10pct"] - r["shortened_10pct"]) ** 2 for r in rows) / len(rows), 3),
+                "in_50pct_band": sum(r["in_50pct_band"] for r in rows)} if all("shorten_prob_10pct" in r for r in rows) else {})}
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -139,22 +257,21 @@ def windrop_outcome(pred, wpts):
 # ---------------------------------------------------------------------------------------------------------------
 DBL_MODEL = "windrop_dbl_v1"
 DBL_POINTS = ("first", "t5", "t2")
+DBL_COMBINED_POINTS = ("t5", "t2")
 DBL_BOARD = {"first": "before_rollover", "t5": "t5", "t2": "t2"}      # race N board each point reads
 LEG1_CAP = 10.0
-DBL_COEFS = {"first": {"c0": -0.1817, "c1": 0.2952},
-             "t5": {"c0": -0.1759, "c1": 0.1647},
-             "t2": {"c0": -0.1765, "c1": 0.1521}}
+# Leave-one-race-out on 12 races (2 meetings): Brier of P(shortens 10%+) against predicting the base rate, mean predicted
+# chance of the top 3 against what happened to them, and mean |ln| error of the close price.
 DBL_VALIDATION = {
-    "first": {"rank_corr": 0.73, "top3_shortened_10pct": 0.61, "all_runners_shortened_10pct": 0.26,
-              "close_log_mae": 0.238, "baseline_mean_drift_mae": 0.344, "baseline_close_equals_now_mae": 0.387},
-    "t5": {"rank_corr": 0.73, "top3_shortened_10pct": 0.64, "all_runners_shortened_10pct": 0.24,
-           "close_log_mae": 0.227, "baseline_mean_drift_mae": 0.325, "baseline_close_equals_now_mae": 0.375},
-    "t2": {"rank_corr": 0.71, "top3_shortened_10pct": 0.61, "all_runners_shortened_10pct": 0.22,
-           "close_log_mae": 0.219, "baseline_mean_drift_mae": 0.308, "baseline_close_equals_now_mae": 0.356},
+    "dbl": {"first": {"brier_10pct": 0.126, "brier_base_rate_only": 0.191, "top3_mean_predicted_prob": 0.64, "top3_realised": 0.61, "close_log_mae": 0.241},
+            "t5": {"brier_10pct": 0.115, "brier_base_rate_only": 0.181, "top3_mean_predicted_prob": 0.63, "top3_realised": 0.61, "close_log_mae": 0.233},
+            "t2": {"brier_10pct": 0.107, "brier_base_rate_only": 0.170, "top3_mean_predicted_prob": 0.61, "top3_realised": 0.58, "close_log_mae": 0.217}},
+    "combined": {"t5": {"brier_10pct": 0.105, "brier_base_rate_only": 0.181, "top3_mean_predicted_prob": 0.67, "top3_realised": 0.67, "close_log_mae": 0.225},
+                 "t2": {"brier_10pct": 0.099, "brier_base_rate_only": 0.170, "top3_mean_predicted_prob": 0.64, "top3_realised": 0.64, "close_log_mae": 0.213}},
 }
-DBL_NOTE = ("Exploratory: 12 races (2 meetings), races 2+ only. Rank correlation, top-3 hit rate and price error are "
-            "leave-one-race-out; the score-to-price mapping is fitted on all 12. About 6 in 10 of the top 3 shortened by "
-            "10% or more (about 1 in 4 of all runners do). A ranking signal, not a betting recommendation.")
+DBL_NOTE = ("Exploratory: 12 races (2 meetings), races 2+ only; chances and price bands are leave-one-race-out checked on those. "
+            "Horses given 60%+ shortened 10%+ about 3 times in 4, horses given under 15% about 1 time in 20. "
+            "A ranking and a chance, not a betting recommendation.")
 
 
 def dbl_frozen(prev):
@@ -182,60 +299,64 @@ def dbl_edges(w2, w1, frozen, horses):
     return out
 
 
-def predict_dbl(s, prev, point):
-    """windrop_dbl_v1 for race state `s` (race N) with `prev` the state of race N-1; errors are labelled."""
+def predict_dbl(s, prev, point, combined=False):
+    """windrop_dbl_v1 for race state `s` (race N) with `prev` the state of race N-1; errors are labelled.
+
+    Default: Double only (score = z(edge)). combined=True (t5, t2): edge plus the Quinella lead (score = z(edge) + z(lead)).
+    """
     key = DBL_BOARD[point]
     wpts, pts = s.get("win_points") or {}, s.get("points") or {}
     w_first = ((wpts.get("before_rollover") or {}).get("odds")) or {}
     w_now = ((wpts.get(key) or {}).get("odds")) or {}
     w1 = (((prev or {}).get("win_points") or {}).get("after_start") or {}).get("odds") or {}
     frozen = dbl_frozen(prev)
-    base = {"model": DBL_MODEL, "at_point": point}
+    base = {"model": DBL_MODEL + ("_combined" if combined else ""), "at_point": point}
+    if combined and point not in DBL_COMBINED_POINTS:
+        return {**base, "error": "combined_needs_t5_or_t2"}
     if not w1:
         return {**base, "error": "need_leg1_win_after_start_board"}
     if not frozen:
         return {**base, "error": "need_frozen_double_board"}
     if not w_first or not w_now:
         return {**base, "error": "need_win_first_board" if not w_first else f"need_win_{key}_board"}
-    use_qin = point != "first"
-    qin_now = (((pts.get(key) or {}).get("odds")) or {}) if use_qin else {}
-    if use_qin and not qin_now:
+    qin_now = (((pts.get(key) or {}).get("odds")) or {}) if combined else {}
+    if combined and not qin_now:
         return {**base, "error": f"need_{key}_quinella_board"}
-    shares = qin_shares(qin_now) if use_qin else {}
-    horses = sorted((h for h, o in w_now.items() if o and o > 0 and w_first.get(h) and (not use_qin or h in shares)), key=int)
+    shares = qin_shares(qin_now) if combined else {}
+    horses = sorted((h for h, o in w_now.items() if o and o > 0 and w_first.get(h) and (not combined or h in shares)), key=int)
     edges = dbl_edges(w_first, w1, frozen, horses)
     horses = [h for h in horses if h in edges]
     if len(horses) < MIN_HORSES:
         return {**base, "error": "too_few_comparable_horses"}
     z_edge = zscores({h: edges[h][0] for h in horses})
     lead = z_lead = None
-    if use_qin:
+    if combined:
         total = sum(1 / w_now[h] for h in horses)
         prob = {h: (1 / w_now[h]) / total for h in horses}
         lead = {h: shares[h] / prob[h] - 1 for h in horses}
         z_lead = zscores(lead)
-    c = DBL_COEFS[point]
+    params = PROB["combined" if combined else "dbl"][point]
     rows = []
     for h in horses:
         score = z_edge[h] + (z_lead[h] if z_lead else 0.0)
-        log_drop = c["c0"] + c["c1"] * score
         rows.append({"horse": h, "score": round(score, 3), "win_odds": w_now[h],
                      "dbl_implied_win_odds": round(edges[h][1], 1),
                      "edge_pct": round(100 * (w_first[h] / edges[h][1] - 1), 1),
                      "lead_pct": round(100 * lead[h], 1) if lead else None,
-                     "predicted_drop_pct": round(100 * (1 - math.exp(-log_drop)), 1),
-                     "predicted_close_odds": round(w_now[h] * math.exp(-log_drop), 1)})
+                     **price_block(w_now[h], score, params)})
     top_edge = set(sorted(horses, key=lambda h: -z_edge[h])[:TOP])
     top_lead = set(sorted(horses, key=lambda h: -z_lead[h])[:TOP]) if z_lead else set()
     rows.sort(key=lambda r: -r["score"])
     for rank, row in enumerate(rows, 1):
         row["rank"] = rank
-        row["signals"] = {"edge_top3": row["horse"] in top_edge, **({"lead_top3": row["horse"] in top_lead} if z_lead else {})}
-        row["signals_fired"] = sum(row["signals"].values())
+        if combined:
+            row["signals"] = {"edge_top3": row["horse"] in top_edge, "lead_top3": row["horse"] in top_lead}
+            row["signals_fired"] = sum(row["signals"].values())
     return {**base, "made_at": (pts.get(key) or {}).get("observed_at"), "target_at": (pts.get(key) or {}).get("target_at"),
-            "inputs": ["WIN", "DBL"] + (["QIN"] if z_lead else []), "leg1_cap_odds": LEG1_CAP,
+            "inputs": ["WIN", "DBL"] + (["QIN"] if combined else []), "leg1_cap_odds": LEG1_CAP,
             "top": [r["horse"] for r in rows[:TOP]],
-            "both_signals": [r["horse"] for r in rows if use_qin and r["signals_fired"] == 2],
-            "horses": rows, "validation": DBL_VALIDATION[point], "note": DBL_NOTE,
-            "meaning": "edge_pct = WIN price at `first` vs the price the frozen Double implies (+ = WIN longer, expected to shorten); "
-                       "predicted_drop_pct > 0 = WIN expected to shorten until the close"}
+            "both_signals": [r["horse"] for r in rows if combined and r["signals_fired"] == 2],
+            "horses": rows, "validation": DBL_VALIDATION["combined" if combined else "dbl"][point], "note": DBL_NOTE,
+            "meaning": "edge_pct = WIN price at `first` vs the price the frozen Double implies (+ = WIN longer, expected to shorten). "
+                       "shorten_prob_10pct = chance the WIN price ends 10% or more shorter than now, shorten_prob_any = chance it ends "
+                       "shorter at all; predicted_close_odds with a 50% band (predicted_close_low..high)"}

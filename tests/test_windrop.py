@@ -45,6 +45,16 @@ class Model(unittest.TestCase):
         self.assertEqual([h["rank"] for h in pred["horses"]], list(range(1, 9)))
         json.dumps(pred)
 
+    def test_chance_of_shortening_and_price_band_are_given_per_horse(self):
+        pred = windrop.predict_windrop(state("5"), "t3")
+        probs = [h["shorten_prob_10pct"] for h in pred["horses"]]
+        self.assertEqual(probs, sorted(probs, reverse=True))
+        for h in pred["horses"]:
+            self.assertTrue(0 < h["shorten_prob_10pct"] < 1 and 0 < h["shorten_prob_any"] < 1)
+            self.assertLess(h["predicted_close_low"], h["predicted_close_odds"])
+            self.assertLess(h["predicted_close_odds"], h["predicted_close_high"])
+        self.assertIn("brier_10pct", windrop.VALIDATION["t3"])
+
     def test_prediction_matches_the_documented_formula(self):
         pred = windrop.predict_windrop(state("5"), "t3")
         c = windrop.COEFS["t3"]
