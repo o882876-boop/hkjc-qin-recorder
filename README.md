@@ -205,3 +205,10 @@ Every prediction also carries `flagged`: the horses whose predicted close price 
 can have 0 or 5), with `flag_validation`. At t2 the Quinella file also carries `longshot` (`windrop_longshot_v1`): horses at 20x or
 more that are in the race top 3 by Quinella-combination drop t5 -> t2 (13 flagged -> 4 shortened 10%+, 61 not flagged -> 0; low
 confidence, 4 fallers). Race records add `windrop_longshot` and the `*_outcome` scoring. See docs/WINDROP.md.
+
+### Quinella 飛 states
+
+Every Quinella, Double and combined prediction row says whether the horse's Quinella-pool share is above its WIN-implied share (`qin_fly_state`:
+`fly`, `tie` within 1 percentage point below, `no_fly` below that; `qin_fly_points` for t5/t3/t2). `qin_no_fly` is the exclusion list (tie is never
+excluded). 16 races: no_fly horses shortened 10%+ only about 9-10% of the time (all runners 21%) and 39 of 42 fallers were kept. An exclusion
+filter, not a pick. See docs/WINDROP.md.

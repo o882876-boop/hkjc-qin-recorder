@@ -88,6 +88,16 @@ class Model(unittest.TestCase):
         out = windrop.windrop_outcome(windrop.predict_dbl(s, prev, "first"), {"after_start": {"odds": {**W2, "5": 9.0}}})
         self.assertGreaterEqual(out["flagged_fell_10pct"], 1)
 
+    def test_quinella_fly_fields_ride_along_at_t5_and_t2_but_not_at_first(self):
+        s, prev = pair("5")
+        for kw in ({}, {"combined": True}):
+            pred = windrop.predict_dbl(s, prev, "t2", **kw)
+            self.assertIn("5", pred["qin_fly"])
+            self.assertEqual(sorted(pred["qin_fly"] + pred["qin_tie"] + pred["qin_no_fly"]), sorted(h["horse"] for h in pred["horses"]))
+            self.assertTrue(all("qin_fly_state" in h for h in pred["horses"]))
+        first = windrop.predict_dbl(s, prev, "first")
+        self.assertNotIn("qin_no_fly", first)
+
     def test_combined_adds_the_quinella_lead_and_flags_horses_with_both_signals(self):
         for point in ("t5", "t2"):
             s, prev = pair("5")

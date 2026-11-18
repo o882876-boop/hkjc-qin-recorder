@@ -172,6 +172,64 @@ def price_block(w_now, score, params):
 
 
 
+# Quinella 飛 (the user's rule): at a given moment a horse's share of the Quinella pool is above its WIN-implied share.
+#   fly    qin_pct > win_pct
+#   tie    win_pct - 1 percentage point <= qin_pct <= win_pct  (打和: nearly equal, never excluded)
+#   no_fly qin_pct < win_pct - 1 percentage point             (the exclusion list `qin_no_fly`)
+# `qin_fly_points` gives the state at t5, t3, t2 so far. 16 races (204 runners, 46 / 42 / 42 shortened 10%+ at t5 / t3 / t2): the 32-40 no-fly
+# horses shortened 10%+ only 9-10% of the time (all runners 21%) and held 3-4 of the fallers; the tie horses shortened 5-7% of the time
+# (so tie is "not no-fly", not "fly"); fly horses about 1 in 3. A filter, not a pick: combine it with the scores above.
+QIN_TIE_PP = 1.0
+QIN_FLY_VALIDATION = {"t5": {"all": {"n": 204, "fallers": 46, "fly": {"n": 106, "fell_10pct": 0.36, "fallers": 38}, "tie": {"n": 58, "fell_10pct": 0.07, "fallers": 4}, "nofly": {"n": 40, "fell_10pct": 0.1, "fallers": 4}}, "le10": {"n": 68, "fallers": 26, "fly": {"n": 36, "fell_10pct": 0.56, "fallers": 20}, "tie": {"n": 6, "fell_10pct": 0.33, "fallers": 2}, "nofly": {"n": 26, "fell_10pct": 0.15, "fallers": 4}}}, "t3": {"all": {"n": 204, "fallers": 42, "fly": {"n": 103, "fell_10pct": 0.33, "fallers": 34}, "tie": {"n": 68, "fell_10pct": 0.07, "fallers": 5}, "nofly": {"n": 33, "fell_10pct": 0.09, "fallers": 3}}, "le10": {"n": 67, "fallers": 23, "fly": {"n": 35, "fell_10pct": 0.51, "fallers": 18}, "tie": {"n": 10, "fell_10pct": 0.2, "fallers": 2}, "nofly": {"n": 22, "fell_10pct": 0.14, "fallers": 3}}}, "t2": {"all": {"n": 204, "fallers": 42, "fly": {"n": 108, "fell_10pct": 0.33, "fallers": 36}, "tie": {"n": 64, "fell_10pct": 0.05, "fallers": 3}, "nofly": {"n": 32, "fell_10pct": 0.09, "fallers": 3}}, "le10": {"n": 67, "fallers": 23, "fly": {"n": 36, "fell_10pct": 0.5, "fallers": 18}, "tie": {"n": 9, "fell_10pct": 0.22, "fallers": 2}, "nofly": {"n": 22, "fell_10pct": 0.14, "fallers": 3}}}}
+QIN_FLY_RULE = ("qin_fly_state: fly = qin_pct > win_pct; tie = within 1 percentage point below (打和, not excluded); "
+                "no_fly = more than 1 percentage point below; qin_no_fly is the exclusion list")
+
+
+def qin_fly_state(gap):
+    return "fly" if gap > 0 else ("tie" if gap >= -QIN_TIE_PP else "no_fly")
+
+
+def qin_fly_table(s, upto):
+    """{point: {horse: (qin_pct, win_pct)}} at t5, t3, t2 up to `upto`, from the stored boards (WIN normalised over the same horses)."""
+    out = {}
+    for point in POINTS[:POINTS.index(upto) + 1]:
+        qin = (((s.get("points") or {}).get(point) or {}).get("odds")) or {}
+        win = (((s.get("win_points") or {}).get(point) or {}).get("odds")) or {}
+        shares = qin_shares(qin)
+        horses = [h for h, o in win.items() if o and o > 0 and h in shares]
+        if len(horses) < MIN_HORSES:
+            continue
+        total = sum(1 / win[h] for h in horses)
+        out[point] = {h: (100 * shares[h], 100 * (1 / win[h]) / total) for h in horses}
+    return out
+
+
+def add_qin_fly(s, point, rows):
+    """Add the Quinella-飛 fields to prediction rows; returns {"fly": [...], "tie": [...], "no_fly": [...]} (horses)."""
+    table = qin_fly_table(s, point)
+    now = table.get(point)
+    groups = {"fly": [], "tie": [], "no_fly": []}
+    if not now:
+        return groups
+    for row in rows:
+        h = row["horse"]
+        if h not in now:
+            continue
+        gap = now[h][0] - now[h][1]
+        state = qin_fly_state(gap)
+        row["qin_gap_pp"] = round(gap, 2)
+        row["qin_fly_state"] = state
+        row["qin_fly_points"] = {pt: qin_fly_state(tbl[h][0] - tbl[h][1]) for pt, tbl in table.items() if h in tbl}
+        row["qin_fly_all_points"] = all(v == "fly" for v in row["qin_fly_points"].values())
+        groups[state].append(h)
+    return groups
+
+
+def qin_fly_fields(groups, point):
+    return {"qin_fly": groups["fly"], "qin_tie": groups["tie"], "qin_no_fly": groups["no_fly"], "qin_fly_rule": QIN_FLY_RULE,
+            "qin_fly_validation": QIN_FLY_VALIDATION[point]}
+
+
 # Flag list: every horse whose predicted close price is at least 5% shorter than its price now (predicted_drop_pct >= 5,
 # i.e. predicted_close_odds <= win_odds x 0.95). No top-N: a race can have 0 or 5 flagged horses.
 FLAG_MIN_DROP_PCT = 5.0
@@ -230,7 +288,8 @@ def predict_windrop(s, point):
     for rank, row in enumerate(rows, 1):
         row["rank"] = rank
     flagged = flag_rows(rows)
-    return {"model": MODEL, "at_point": point, "made_at": (pts.get(point) or {}).get("observed_at"),
+    fly = qin_fly_fields(add_qin_fly(s, point, rows), point)
+    return {"model": MODEL, "at_point": point, "made_at": (pts.get(point) or {}).get("observed_at"), **fly,
             "target_at": (pts.get(point) or {}).get("target_at"),
             "inputs": ["WIN", "QIN"], "top": [r["horse"] for r in rows[:TOP]], "horses": rows,
             "flagged": flagged, "flag_rule": FLAG_RULE, "flag_validation": FLAG_VALIDATION["qin"][point],
@@ -247,7 +306,14 @@ def _flag_outcome(pred, rows):
         return {}
     hit = [r for r in rows if r["horse"] in flagged]
     missed = [r for r in rows if r["horse"] not in flagged and r["actual_drop_pct"] >= 10]
-    return {"flagged_n": len(hit), "flagged_fell_any": sum(r["actual_drop_pct"] > 0 for r in hit),
+    fly = {}
+    if "qin_no_fly" in pred:
+        for name, key in (("fly", "qin_fly"), ("tie", "qin_tie"), ("nofly", "qin_no_fly")):
+            group = [r for r in rows if r["horse"] in set(pred.get(key) or [])]
+            fly[f"{name}_n"] = len(group)
+            fly[f"{name}_fell_10pct"] = sum(r["actual_drop_pct"] >= 10 for r in group)
+        fly["fell_10pct_total"] = sum(r["actual_drop_pct"] >= 10 for r in rows)
+    return {**fly, "flagged_n": len(hit), "flagged_fell_any": sum(r["actual_drop_pct"] > 0 for r in hit),
             "flagged_fell_10pct": sum(r["actual_drop_pct"] >= 10 for r in hit), "missed_fell_10pct": len(missed),
             "missed_horses": [r["horse"] for r in missed]}
 
@@ -392,7 +458,8 @@ def predict_dbl(s, prev, point, combined=False):
             row["signals"] = {"edge_top3": row["horse"] in top_edge, "lead_top3": row["horse"] in top_lead}
             row["signals_fired"] = sum(row["signals"].values())
     flagged = flag_rows(rows)
-    return {**base, "flagged": flagged, "flag_rule": FLAG_RULE,
+    fly = qin_fly_fields(add_qin_fly(s, point, rows), point) if point in DBL_COMBINED_POINTS else {}
+    return {**base, **fly, "flagged": flagged, "flag_rule": FLAG_RULE,
             "flag_validation": FLAG_VALIDATION["combined" if combined else "dbl"][point], "made_at": (pts.get(key) or {}).get("observed_at"), "target_at": (pts.get(key) or {}).get("target_at"),
             "inputs": ["WIN", "DBL"] + (["QIN"] if combined else []), "leg1_cap_odds": LEG1_CAP,
             "top": [r["horse"] for r in rows[:TOP]],

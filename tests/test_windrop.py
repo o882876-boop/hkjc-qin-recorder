@@ -94,6 +94,41 @@ class Model(unittest.TestCase):
         self.assertGreaterEqual(res["flagged_fell_10pct"], 1)
         self.assertIn("missed_fell_10pct", res)
 
+    def test_quinella_fly_states_follow_the_share_gap_and_tie_is_never_excluded(self):
+        self.assertEqual([windrop.qin_fly_state(g) for g in (2.0, 0.01, 0.0, -0.3, -1.0, -1.01, -8.0)],
+                         ["fly", "fly", "tie", "tie", "tie", "no_fly", "no_fly"])
+        pred = windrop.predict_windrop(state("5"), "t3")
+        rows = {h["horse"]: h for h in pred["horses"]}
+        for h in rows.values():
+            self.assertAlmostEqual(h["qin_gap_pp"], h["qin_support_pct"] - h["win_implied_pct"], delta=0.02)
+            self.assertEqual(h["qin_fly_state"], windrop.qin_fly_state(h["qin_gap_pp"]))
+            self.assertEqual(set(h["qin_fly_points"]), {"t3"})
+        self.assertEqual(rows["5"]["qin_fly_state"], "fly")
+        groups = [pred["qin_fly"], pred["qin_tie"], pred["qin_no_fly"]]
+        self.assertEqual(sorted(sum(groups, [])), sorted(rows))                        # every horse in exactly one state
+        self.assertTrue(all(rows[h]["qin_gap_pp"] < -1 for h in pred["qin_no_fly"]))   # only the clearly-below horses are excluded
+        self.assertTrue(all(-1 <= rows[h]["qin_gap_pp"] <= 0 for h in pred["qin_tie"]))
+        self.assertIn("qin_fly_validation", pred)
+        json.dumps(pred)
+
+    def test_quinella_fly_is_tracked_across_t5_t3_t2_when_the_earlier_boards_exist(self):
+        s = state("5", "t2")
+        s["points"]["t5"] = qin_board("5")
+        s["points"]["t3"] = qin_board("5")
+        s["win_points"]["t3"] = {"odds": dict(WIN), "observed_at": "x"}
+        pred = windrop.predict_windrop(s, "t2")
+        five = next(h for h in pred["horses"] if h["horse"] == "5")
+        self.assertEqual(set(five["qin_fly_points"]), {"t5", "t3", "t2"})
+        self.assertTrue(five["qin_fly_all_points"])
+        self.assertIn("5", pred["qin_fly"])
+
+    def test_quinella_fly_outcome_counts_each_group(self):
+        pred = windrop.predict_windrop(state("5"), "t3")
+        out = windrop.windrop_outcome(pred, {"after_start": {"odds": {**WIN, "5": 9.0}}})
+        self.assertEqual(out["fly_n"] + out["tie_n"] + out["nofly_n"], len(pred["horses"]))
+        self.assertGreaterEqual(out["fly_fell_10pct"], 1)
+        self.assertEqual(out["fell_10pct_total"], out["fly_fell_10pct"] + out["tie_fell_10pct"] + out["nofly_fell_10pct"])
+
     def test_prediction_matches_the_documented_formula(self):
         pred = windrop.predict_windrop(state("5"), "t3")
         c = windrop.COEFS["t3"]

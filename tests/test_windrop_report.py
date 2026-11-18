@@ -45,6 +45,11 @@ class Scorecard(unittest.TestCase):
         self.assertIn("| Quinella (windrop_v1) | t2 | 3 |", text)
         self.assertIn("| Double (windrop_dbl_v1) | first | 2 |", text)
         self.assertIn("validated", text)
+        self.assertIn("Quinella 飛", text)
+        self.assertIn("fallers kept by excluding no_fly", text)
+        for (key, point), tot in totals.items():
+            if key == "windrop":
+                self.assertEqual(tot["fly_n"] + tot["tie_n"] + tot["nofly_n"], tot["horses"])
 
     def test_predictions_without_an_outcome_or_with_errors_are_left_out(self):
         self.run_main(base.card(3), P1 - M(45), "801")

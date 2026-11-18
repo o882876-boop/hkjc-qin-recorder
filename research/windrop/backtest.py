@@ -77,6 +77,11 @@ def load_races(data, days=None):
                 lead = np.array([boards[point][h] for h in horses]) / prob - 1
                 mom = np.array([100 * (win["t5"][h] - win[point][h]) / win["t5"][h] for h in horses]) if point in ("t3", "t2") else np.zeros(len(horses))
                 race["feat"][point] = {"fav": z(np.log(prob)), "lead": z(lead), "winmom": z(mom)}
+                if point != "before_rollover":
+                    # same normalisation as windrop.qin_fly_table: WIN share over every runner that has both boards
+                    both = [h for h, o in win[point].items() if o and o > 0 and h in boards[point]]
+                    total = sum(1 / win[point][h] for h in both)
+                    race.setdefault("gap", {})[point] = np.array([100 * (boards[point][h] - (1 / win[point][h]) / total) for h in horses])
                 race["w"][point] = w
                 close = np.array([win["after_start"][h] for h in horses])
                 race["y"][point] = 100 * (w - close) / w
@@ -187,6 +192,23 @@ def longshot_summary(races):
           f"not flagged {other}, shortened 10%+ {int(other10)}; all {flagged + other}: {int(fl10 + other10)}")
 
 
+def fly_filter_summary(races):
+    """Quinella 飛 (qin share vs WIN share at the same point): fly > 0, tie within 1 percentage point below, no_fly below that."""
+    for point in ("t5", "t3", "t2"):
+        counts = {"fly": [0, 0], "tie": [0, 0], "no_fly": [0, 0]}
+        fallers = 0
+        for r in races:
+            for share_gap, y in zip(r["gap"][point], r["y"][point]):
+                state = windrop.qin_fly_state(share_gap)
+                counts[state][0] += 1
+                counts[state][1] += y >= THRESHOLD
+                fallers += y >= THRESHOLD
+        n = sum(c[0] for c in counts.values())
+        print(f"{point}: {n} runners, {fallers} shortened {THRESHOLD:g}%+ | " + " | ".join(
+            f"{k} {c[0]} runners {100 * c[1] / max(c[0], 1):.0f}% ({c[1]})" for k, c in counts.items())
+            + f" | excluding no_fly keeps {fallers - counts['no_fly'][1]}/{fallers} fallers")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--data", required=True, help="local checkout of the odds-data branch")
@@ -207,6 +229,8 @@ def main():
         print("\n== Combined: z(edge) + z(lead), equal weights ==")
         for point in ("t5", "t2"):
             summarise(f"combined {point}", leave_one_out(dbl, point, ["edge", "lead"], {"edge": 1.0, "lead": 1.0}))
+    print("\n== Quinella 飛 filter (no fitted parameter): fly / tie / no_fly by share gap ==")
+    fly_filter_summary(races)
     print("\n== Longshot supplement (windrop_longshot_v1, no model: a flag) ==")
     longshot_summary(races)
     if args.refit:

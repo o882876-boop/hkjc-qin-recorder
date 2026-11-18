@@ -34,6 +34,8 @@ def aggregate(records):
                 t["horses"] += horses
                 for k in ("flagged_n", "flagged_fell_any", "flagged_fell_10pct", "missed_fell_10pct"):
                     t[k] += out.get(k, 0)
+                for k in ("fly_n", "fly_fell_10pct", "tie_n", "tie_fell_10pct", "nofly_n", "nofly_fell_10pct", "fell_10pct_total"):
+                    t[k] += out.get(k, 0)
                 t["brier_sum"] += out.get("brier_10pct", 0.0) * horses
                 t["band"] += out.get("in_50pct_band", 0)
                 t["mae_sum"] += out.get("close_log_mae", 0.0) * horses
@@ -69,6 +71,22 @@ def render(records):
             lines.append(f"| {title} | {point} | {int(t['races'])} | {fl / t['races']:.1f} | {pct(t['flagged_fell_any'], fl)} | {pct(f10, fl)} | "
                          f"{pct(f10, fell10_total)} | {t['brier_sum'] / t['horses']:.3f} | {pct(t['band'], t['horses'])} | "
                          f"{100 * v.get('flagged_fell_10pct', 0):.0f}% / {100 * v.get('caught_of_fell_10pct', 0):.0f}% |")
+    fly_lines = []
+    for key, _, title, points in FAMILIES:
+        for point in points:
+            t = totals.get((key, point))
+            if not t or not (t["fly_n"] + t["tie_n"] + t["nofly_n"]):
+                continue
+            pct = lambda a, b: f"{100 * a / b:.0f}% ({int(a)}/{int(b)})" if b else "-"
+            kept = t["fell_10pct_total"] - t["nofly_fell_10pct"]
+            fly_lines.append(f"| {title} | {point} | {pct(t['fly_fell_10pct'], t['fly_n'])} | {pct(t['tie_fell_10pct'], t['tie_n'])} | "
+                             f"{pct(t['nofly_fell_10pct'], t['nofly_n'])} | {pct(kept, t['fell_10pct_total'])} |")
+    if fly_lines:
+        lines += ["", "Quinella 飛 (qin share vs WIN share; no_fly = more than 1 percentage point below, tie = within 1 point): "
+                      "share that shortened 10%+ in each group, and how many of all 10%+ fallers the no_fly exclusion kept. "
+                      "Validated: no_fly about 9-10%, tie about 5-7%, fly about 1 in 3; 83-86% of fallers kept.", "",
+                  "| prediction | point | fly: fell 10%+ | tie: fell 10%+ | no_fly: fell 10%+ | fallers kept by excluding no_fly |",
+                  "|---|---|---|---|---|---|"] + fly_lines
     if ls:
         lines += ["", f"Longshots (>= 20x at t2), {int(ls['races'])} races: flagged {int(ls['flagged'])} -> {int(ls['flagged_fell'])} shortened 10%+; "
                       f"not flagged {int(ls['other'])} -> {int(ls['other_fell'])} (validated: 13 -> 4, 61 -> 0)."]

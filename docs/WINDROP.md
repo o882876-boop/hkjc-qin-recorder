@@ -38,6 +38,32 @@ three points. High edge = WIN is longer than the Double implies = expected to sh
 itself does see them: flag a 20x+ horse if it is in the race top 3 by mean Quinella-combination drop t5 -> t2 (all horses ranked together).
 13 flagged -> 4 shortened 10%+; 61 not flagged -> 0. Only 4 longshots fell: low confidence, so it is a separate flag.
 
+## Quinella 飛 filter (qin share vs WIN share)
+
+The user's rule: at a given moment, a horse whose share of the Quinella pool (`qin_pct`, as in `qin_shares`) is **larger** than its WIN-implied
+share (`win_pct`, normalised over the same horses) has "Quinella 飛" (this is the sign of `lead`). Three states, per point (t5, t3, t2):
+
+| state | gap = qin_pct - win_pct | meaning |
+|---|---|---|
+| `fly` 有飛 | > 0 | Quinella keener on the horse than WIN |
+| `tie` 打和 | -1.0 to 0 percentage points | nearly equal: **never excluded** (user's decision) |
+| `no_fly` 冇飛 | below -1.0 | Quinella clearly less keen: the exclusion list `qin_no_fly` |
+
+Fields on every Quinella, Double and combined row (t5, t3 for Quinella, t5 and t2 for Double/combined): `qin_gap_pp`, `qin_fly_state`,
+`qin_fly_points` (state at t5, t3, t2 so far), `qin_fly_all_points`; on the prediction: `qin_fly`, `qin_tie`, `qin_no_fly`, `qin_fly_validation`.
+No parameter is fitted, so the numbers are plain counts (16 races, 204 runners; 46 / 42 / 42 shortened 10%+ at t5 / t3 / t2):
+
+| point | fly | tie | no_fly | fallers kept by excluding no_fly |
+|---|---|---|---|---|
+| t5 | 106 runners, 36% shortened 10%+ | 58, 7% | 40, 10% | 42/46 |
+| t3 | 103, 33% | 68, 7% | 33, 9% | 39/42 |
+| t2 | 108, 33% | 64, 5% | 32, 9% | 39/42 |
+
+Use it as an **exclusion filter**: no_fly horses shortened 10%+ about 9-10% of the time (all runners 21%) and in the 10x-or-less group the
+no_fly horses were 16% against 50% for fly horses. As a pick it is weak (fly horses: about 1 in 3), and `tie` horses behave like `no_fly` horses
+(5-7%): not excluded, but not a reason to back a horse. Combine with the scores and flag list above. The six strict-rule misses were mostly
+within 1 point of equal (two of the user's picks), which is why `tie` exists. `backtest.py` prints this table; `report.py` scores it live.
+
 ## Where it is written
 
 Recorder (`recorder.py`, state in `make_windrops`, `make_windrops_dbl`; files in `publish_windrops`, `publish_windrops_dbl`), once per
