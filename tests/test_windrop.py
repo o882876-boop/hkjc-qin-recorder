@@ -55,6 +55,45 @@ class Model(unittest.TestCase):
             self.assertLess(h["predicted_close_odds"], h["predicted_close_high"])
         self.assertIn("brier_10pct", windrop.VALIDATION["t3"])
 
+    def test_flag_list_is_every_horse_predicted_at_least_5_percent_shorter_not_a_top_n(self):
+        pred = windrop.predict_windrop(state("5"), "t3")
+        by_row = [h["horse"] for h in pred["horses"] if h["predicted_drop_pct"] >= 5]
+        self.assertEqual(pred["flagged"], by_row)
+        self.assertTrue(all(h["flagged"] == (h["predicted_drop_pct"] >= 5) for h in pred["horses"]))
+        self.assertIn("5", pred["flagged"])
+        self.assertIn("0.95", pred["flag_rule"])
+        self.assertIn("flagged_per_race", pred["flag_validation"])
+        flat = state("5")                                                  # nothing stands out: no horse needs to be flagged
+        flat["points"]["t3"] = qin_board(None)
+        self.assertLessEqual(len(windrop.predict_windrop(flat, "t3")["flagged"]), 3)
+
+    def test_longshots_are_flagged_from_the_quinella_trend_not_from_favourite_ness(self):
+        s = state("8", "t2")
+        s["points"]["t5"] = qin_board(None)                                # before: nothing stands out
+        pred = windrop.predict_longshot(s)
+        self.assertEqual(pred["model"], "windrop_longshot_v1")
+        self.assertTrue(all(h["win_odds"] >= 20 for h in pred["horses"]))
+        self.assertEqual({h["horse"] for h in pred["horses"]}, {"6", "7", "8"})
+        self.assertIn("8", pred["flagged"])
+        self.assertEqual(pred["horses"][0]["horse"], "8")                  # the biggest Quinella drop comes first
+        self.assertNotIn("shorten_prob_10pct", pred["horses"][0])         # a flag only, no price or chance
+        json.dumps(pred)
+        self.assertEqual(windrop.predict_longshot({"points": {}})["error"], "need_t5_t2_quinella_and_t2_win_boards")
+
+    def test_longshot_and_flag_outcomes_count_what_happened(self):
+        s = state("8", "t2")
+        s["points"]["t5"] = qin_board(None)
+        pred = windrop.predict_longshot(s)
+        out = windrop.longshot_outcome(pred, {"after_start": {"odds": {**WIN, "8": 40.0}}})        # 50 -> 40: 8 shortened 20%
+        self.assertEqual((out["flagged_n"], out["flagged_fell_10pct"]), (len(pred["flagged"]), 1))
+        self.assertEqual(windrop.longshot_outcome(pred, {}), {"missing": "no_after_start"})
+        self.assertIsNone(windrop.longshot_outcome(None, {}))
+        main = windrop.predict_windrop(state("5"), "t3")
+        res = windrop.windrop_outcome(main, {"after_start": {"odds": {**WIN, "5": 9.0}}})
+        self.assertGreaterEqual(res["flagged_n"], 1)
+        self.assertGreaterEqual(res["flagged_fell_10pct"], 1)
+        self.assertIn("missed_fell_10pct", res)
+
     def test_prediction_matches_the_documented_formula(self):
         pred = windrop.predict_windrop(state("5"), "t3")
         c = windrop.COEFS["t3"]
@@ -123,6 +162,11 @@ class WindropInMainLoop(unittest.TestCase):
                 self.assertGreaterEqual(written, post - M(early))
                 self.assertLessEqual(written, post - M(late) + M(1))
                 record = json.loads(base.FakeArchive.files[f"qin-history/2026-11-11_HV/race-0{i}-600-1.json"])
+                self.assertIn("flagged", body["prediction"])
+                self.assertEqual(body["longshot"] is not None, point == "t2")
+                if point == "t2":
+                    self.assertEqual(record["windrop_longshot"], body["longshot"])
+                    self.assertIn("windrop_longshot_outcome", record)
                 self.assertEqual(record["windrop"][point], body["prediction"])
                 self.assertIn(record["windrop_outcome"][point].get("top_hits", "missing"), range(0, 4) if "top_hits" in record["windrop_outcome"][point] else ["missing"])
 

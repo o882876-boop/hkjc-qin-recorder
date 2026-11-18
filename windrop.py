@@ -172,6 +172,30 @@ def price_block(w_now, score, params):
 
 
 
+# Flag list: every horse whose predicted close price is at least 5% shorter than its price now (predicted_drop_pct >= 5,
+# i.e. predicted_close_odds <= win_odds x 0.95). No top-N: a race can have 0 or 5 flagged horses.
+FLAG_MIN_DROP_PCT = 5.0
+FLAG_RULE = "predicted_close_odds <= win_odds x 0.95 (predicted_drop_pct >= 5)"
+# Leave-one-race-out results of that rule. QIN = 16 races, DBL / combined = 12 races (races 2+).
+FLAG_VALIDATION = {
+    "qin": {"t5": {"flagged_per_race": 2.5, "flagged_fell_any": 0.62, "flagged_fell_10pct": 0.55, "caught_of_fell_10pct": 0.48},
+            "t3": {"flagged_per_race": 2.2, "flagged_fell_any": 0.72, "flagged_fell_10pct": 0.56, "caught_of_fell_10pct": 0.48},
+            "t2": {"flagged_per_race": 2.3, "flagged_fell_any": 0.76, "flagged_fell_10pct": 0.59, "caught_of_fell_10pct": 0.52}},
+    "dbl": {"first": {"flagged_per_race": 2.7, "flagged_fell_any": 0.81, "flagged_fell_10pct": 0.72, "caught_of_fell_10pct": 0.59},
+            "t5": {"flagged_per_race": 2.6, "flagged_fell_any": 0.81, "flagged_fell_10pct": 0.74, "caught_of_fell_10pct": 0.64},
+            "t2": {"flagged_per_race": 2.2, "flagged_fell_any": 0.85, "flagged_fell_10pct": 0.74, "caught_of_fell_10pct": 0.61}},
+    "combined": {"t5": {"flagged_per_race": 2.8, "flagged_fell_any": 0.73, "flagged_fell_10pct": 0.64, "caught_of_fell_10pct": 0.58},
+                 "t2": {"flagged_per_race": 2.6, "flagged_fell_any": 0.74, "flagged_fell_10pct": 0.65, "caught_of_fell_10pct": 0.61}},
+}
+
+
+def flag_rows(rows):
+    """Mark rows (already ranked) with `flagged`; returns the flagged horses, best first."""
+    for row in rows:
+        row["flagged"] = row["predicted_drop_pct"] >= FLAG_MIN_DROP_PCT
+    return [row["horse"] for row in rows if row["flagged"]]
+
+
 def predict_windrop(s, point):
     """Prediction for one race state `s` at `point`; errors are labelled, never guessed."""
     pts, wpts = s.get("points") or {}, s.get("win_points") or {}
@@ -205,13 +229,27 @@ def predict_windrop(s, point):
     rows.sort(key=lambda r: -r["score"])
     for rank, row in enumerate(rows, 1):
         row["rank"] = rank
+    flagged = flag_rows(rows)
     return {"model": MODEL, "at_point": point, "made_at": (pts.get(point) or {}).get("observed_at"),
             "target_at": (pts.get(point) or {}).get("target_at"),
             "inputs": ["WIN", "QIN"], "top": [r["horse"] for r in rows[:TOP]], "horses": rows,
+            "flagged": flagged, "flag_rule": FLAG_RULE, "flag_validation": FLAG_VALIDATION["qin"][point],
             "validation": VALIDATION[point], "note": NOTE,
             "meaning": "shorten_prob_10pct = chance the WIN price ends 10% or more shorter than now, shorten_prob_any = chance it ends "
                        "shorter at all; predicted_close_odds = win odds now x exp(-(c0 + c1 x score)) with a 50% band "
                        "(predicted_close_low..high); predicted_drop_pct > 0 = expected to shorten"}
+
+
+def _flag_outcome(pred, rows):
+    """What happened to the flagged horses: how many fell at all / 10%+, and how many 10%+ fallers were not flagged."""
+    flagged = set(pred.get("flagged") or [])
+    if "flagged" not in pred:
+        return {}
+    hit = [r for r in rows if r["horse"] in flagged]
+    missed = [r for r in rows if r["horse"] not in flagged and r["actual_drop_pct"] >= 10]
+    return {"flagged_n": len(hit), "flagged_fell_any": sum(r["actual_drop_pct"] > 0 for r in hit),
+            "flagged_fell_10pct": sum(r["actual_drop_pct"] >= 10 for r in hit), "missed_fell_10pct": len(missed),
+            "missed_horses": [r["horse"] for r in missed]}
 
 
 def windrop_outcome(pred, wpts):
@@ -241,6 +279,7 @@ def windrop_outcome(pred, wpts):
             "top_hits": len(set(pred["top"]) & set(actual_top)), "chance_hits": round(TOP * TOP / len(rows), 2),
             "top_shortened_10pct": sum(1 for r in picked if r["actual_drop_pct"] >= 10), "top_n": len(picked),
             "close_log_mae": round(sum(r["abs_log_error"] for r in rows) / len(rows), 3),
+            **_flag_outcome(pred, rows),
             **({"brier_10pct": round(sum((r["shorten_prob_10pct"] - r["shortened_10pct"]) ** 2 for r in rows) / len(rows), 3),
                 "in_50pct_band": sum(r["in_50pct_band"] for r in rows)} if all("shorten_prob_10pct" in r for r in rows) else {})}
 
@@ -266,11 +305,11 @@ DBL_VALIDATION = {
     "dbl": {"first": {"brier_10pct": 0.126, "brier_base_rate_only": 0.191, "top3_mean_predicted_prob": 0.64, "top3_realised": 0.61, "close_log_mae": 0.241},
             "t5": {"brier_10pct": 0.115, "brier_base_rate_only": 0.181, "top3_mean_predicted_prob": 0.63, "top3_realised": 0.61, "close_log_mae": 0.233},
             "t2": {"brier_10pct": 0.107, "brier_base_rate_only": 0.170, "top3_mean_predicted_prob": 0.61, "top3_realised": 0.58, "close_log_mae": 0.217}},
-    "combined": {"t5": {"brier_10pct": 0.105, "brier_base_rate_only": 0.181, "top3_mean_predicted_prob": 0.67, "top3_realised": 0.67, "close_log_mae": 0.225},
-                 "t2": {"brier_10pct": 0.099, "brier_base_rate_only": 0.170, "top3_mean_predicted_prob": 0.64, "top3_realised": 0.64, "close_log_mae": 0.213}},
+    "combined": {"t5": {"brier_10pct": 0.109, "brier_base_rate_only": 0.181, "top3_mean_predicted_prob": 0.67, "top3_realised": 0.64, "close_log_mae": 0.229},
+                 "t2": {"brier_10pct": 0.102, "brier_base_rate_only": 0.170, "top3_mean_predicted_prob": 0.64, "top3_realised": 0.61, "close_log_mae": 0.221}},
 }
 DBL_NOTE = ("Exploratory: 12 races (2 meetings), races 2+ only; chances and price bands are leave-one-race-out checked on those. "
-            "Horses given 60%+ shortened 10%+ about 3 times in 4, horses given under 15% about 1 time in 20. "
+            "Horses given 60%+ shortened 10%+ about 7 times in 10, horses given under 15% about 1 time in 25. "
             "A ranking and a chance, not a betting recommendation.")
 
 
@@ -352,7 +391,9 @@ def predict_dbl(s, prev, point, combined=False):
         if combined:
             row["signals"] = {"edge_top3": row["horse"] in top_edge, "lead_top3": row["horse"] in top_lead}
             row["signals_fired"] = sum(row["signals"].values())
-    return {**base, "made_at": (pts.get(key) or {}).get("observed_at"), "target_at": (pts.get(key) or {}).get("target_at"),
+    flagged = flag_rows(rows)
+    return {**base, "flagged": flagged, "flag_rule": FLAG_RULE,
+            "flag_validation": FLAG_VALIDATION["combined" if combined else "dbl"][point], "made_at": (pts.get(key) or {}).get("observed_at"), "target_at": (pts.get(key) or {}).get("target_at"),
             "inputs": ["WIN", "DBL"] + (["QIN"] if combined else []), "leg1_cap_odds": LEG1_CAP,
             "top": [r["horse"] for r in rows[:TOP]],
             "both_signals": [r["horse"] for r in rows if combined and r["signals_fired"] == 2],
@@ -360,3 +401,67 @@ def predict_dbl(s, prev, point, combined=False):
             "meaning": "edge_pct = WIN price at `first` vs the price the frozen Double implies (+ = WIN longer, expected to shorten). "
                        "shorten_prob_10pct = chance the WIN price ends 10% or more shorter than now, shorten_prob_any = chance it ends "
                        "shorter at all; predicted_close_odds with a 50% band (predicted_close_low..high)"}
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# windrop_longshot_v1 (t2): horses at 20x or more. windrop_v1 / windrop_dbl_v1 lean on favourite-ness, so a long price
+# is never ranked high (0 of 74 longshots in 16 races). The Quinella trend itself does see them: the horses whose Quinella
+# combinations shortened most between t5 and t2 (top 3 of the race). Flag only, no price or chance is predicted.
+# 16 races (2026-11-14 ST, 2026-11-18 HV): 13 longshots flagged, 4 shortened 10%+ (31%); 61 not flagged, 0 did (0%);
+# all 74 longshots: 4 (5%). Four fallers only: low confidence, kept separate on purpose.
+# ---------------------------------------------------------------------------------------------------------------
+LONGSHOT_MODEL = "windrop_longshot_v1"
+LONGSHOT_MIN_ODDS = 20.0
+LONGSHOT_VALIDATION = {"races": 16, "longshots": 74, "flagged": 13, "flagged_shortened_10pct": 4,
+                       "unflagged": 61, "unflagged_shortened_10pct": 0, "all_longshots_shortened_10pct": 4}
+LONGSHOT_NOTE = ("Low confidence: 4 longshots shortened 10%+ in 16 races. Of the longshots whose Quinella combinations shortened "
+                 "most (race top 3), about 3 in 10 shortened 10%+; none of the others did. A flag, not a price or a chance.")
+
+
+def qin_horse_drops(early, late):
+    """{horse: mean % drop of its Quinella combinations between two boards}; needs 5+ comparable combinations."""
+    per = {}
+    for pair, a in (early or {}).items():
+        b = (late or {}).get(pair)
+        if a and b:
+            for horse in pair.split("-"):
+                per.setdefault(horse, []).append(100 * (a - b) / a)
+    return {h: sum(v) / len(v) for h, v in per.items() if len(v) >= 5}
+
+
+def predict_longshot(s):
+    pts, wpts = s.get("points") or {}, s.get("win_points") or {}
+    base = {"model": LONGSHOT_MODEL, "at_point": "t2"}
+    early, late = ((pts.get("t5") or {}).get("odds")) or {}, ((pts.get("t2") or {}).get("odds")) or {}
+    w_now = ((wpts.get("t2") or {}).get("odds")) or {}
+    if not early or not late or not w_now:
+        return {**base, "error": "need_t5_t2_quinella_and_t2_win_boards"}
+    drops = qin_horse_drops(early, late)
+    horses = [h for h in drops if w_now.get(h) and w_now[h] > 0]
+    if len(horses) < MIN_HORSES:
+        return {**base, "error": "too_few_comparable_horses"}
+    order = sorted(horses, key=lambda h: -drops[h])
+    race_rank = {h: i for i, h in enumerate(order, 1)}
+    rows = [{"horse": h, "win_odds": w_now[h], "qin_drop_pct_t5_to_t2": round(drops[h], 2), "race_rank": race_rank[h],
+             "flagged": race_rank[h] <= TOP}
+            for h in sorted(horses, key=lambda h: race_rank[h]) if w_now[h] >= LONGSHOT_MIN_ODDS]
+    return {**base, "min_odds": LONGSHOT_MIN_ODDS, "made_at": (pts.get("t2") or {}).get("observed_at"),
+            "flagged": [r["horse"] for r in rows if r["flagged"]], "horses": rows,
+            "validation": LONGSHOT_VALIDATION, "note": LONGSHOT_NOTE,
+            "meaning": f"horses at {LONGSHOT_MIN_ODDS:g}x or more at t2; flagged = in the race top {TOP} by mean Quinella-combination "
+                       "drop t5 -> t2 (all horses ranked together)"}
+
+
+def longshot_outcome(pred, wpts):
+    if not pred or "error" in pred:
+        return None
+    final = ((wpts or {}).get("after_start") or {}).get("odds")
+    if not final:
+        return {"missing": "no_after_start"}
+    rows = [{"horse": h["horse"], "flagged": h["flagged"], "win_odds": h["win_odds"], "actual_close": final.get(h["horse"]),
+             "actual_drop_pct": round(100 * (h["win_odds"] - final[h["horse"]]) / h["win_odds"], 1)}
+            for h in pred["horses"] if final.get(h["horse"])]
+    flagged = [r for r in rows if r["flagged"]]
+    return {"horses": rows, "longshots": len(rows), "flagged_n": len(flagged),
+            "flagged_fell_10pct": sum(r["actual_drop_pct"] >= 10 for r in flagged),
+            "unflagged_fell_10pct": sum(r["actual_drop_pct"] >= 10 for r in rows if not r["flagged"])}

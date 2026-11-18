@@ -157,6 +157,8 @@ from the same external scheduler that triggers `record.yml`: `POST /repos/<owner
 with `{"ref":"main"}`. A backup schedule exists but GitHub fires it unreliably. Checks: `probe` reads race 1
 once and reports the status; `write_test` verifies the private archive write.
 
+> The whole windrop family (Quinella, Double, combined, longshot, flag list) is described in [docs/WINDROP.md](docs/WINDROP.md); reproduce with `research/windrop/backtest.py`, score live with `research/windrop/report.py`.
+
 ## windrop_v1: predicted WIN shortening and close price (t5, t3, t2)
 
 At t5, t3 and t2 of every race the recorder also writes `predictions/<date>_<venue>/race-NN-windrop-<point>-<run>.json`
@@ -191,7 +193,15 @@ Written per race 2+ as `predictions/<date>_<venue>/race-NN-windrop-dbl-<first|t5
 `*_outcome`, which score each chance with a Brier value and count the horses inside the 50% band).
 
 Fitted on 12 races (Sha Tin 2026-11-14, Happy Valley 2026-11-18), 16 for the Quinella model; checked leave-one-race-out. The
-chances are calibrated: horses given 60%+ shortened 10%+ about 3 times in 4, horses given under 15% about 1 time in 20, and the
+chances are calibrated: horses given 60%+ shortened 10%+ about 7 times in 10, horses given under 15% about 1 time in 25, and the
 50% band holds the close price about half the time. Brier score of the 10% chance (lower is better, base rate alone in brackets):
-Double 0.107-0.126 (0.17-0.19), combined 0.099-0.105 (0.17-0.18), Quinella 0.112-0.131 (0.16-0.18). Exploratory, two
+Double 0.107-0.126 (0.17-0.19), combined 0.102-0.109 (0.17-0.18), Quinella 0.112-0.131 (0.16-0.18). Exploratory, two
 meetings: a ranking and a chance, not a betting recommendation; refit as more race days are stored.
+
+
+### Flag list and longshot flag
+
+Every prediction also carries `flagged`: the horses whose predicted close price is at least 5% below the price now (no top-N, a race
+can have 0 or 5), with `flag_validation`. At t2 the Quinella file also carries `longshot` (`windrop_longshot_v1`): horses at 20x or
+more that are in the race top 3 by Quinella-combination drop t5 -> t2 (13 flagged -> 4 shortened 10%+, 61 not flagged -> 0; low
+confidence, 4 fallers). Race records add `windrop_longshot` and the `*_outcome` scoring. See docs/WINDROP.md.

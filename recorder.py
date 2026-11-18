@@ -878,6 +878,11 @@ class Recorder:
                     except Exception as error:  # noqa: BLE001 - a prediction bug must never stop the recorder
                         s[key] = {"model": windrop.MODEL, "at_point": point, "error": type(error).__name__}
                         log(f"R{n} {point} windrop skipped ({type(error).__name__})")
+                    if point == "t2" and "windrop_longshot_t2" not in s:
+                        try:
+                            s["windrop_longshot_t2"] = windrop.predict_longshot(s)
+                        except Exception as error:  # noqa: BLE001
+                            s["windrop_longshot_t2"] = {"model": windrop.LONGSHOT_MODEL, "at_point": "t2", "error": type(error).__name__}
                 due.append((n, point))
         return due
 
@@ -1022,6 +1027,10 @@ class Recorder:
                 windrop_outcomes[point] = windrop.windrop_outcome(s.get(f"windrop_{point}"), win_points)
             except Exception as error:  # noqa: BLE001
                 windrop_outcomes[point] = {"error": type(error).__name__}
+        try:
+            windrop_longshot_outcome = windrop.longshot_outcome(s.get("windrop_longshot_t2"), win_points)
+        except Exception as error:  # noqa: BLE001
+            windrop_longshot_outcome = {"error": type(error).__name__}
         windrop_dbl_outcomes = {}
         for point in windrop.DBL_POINTS:
             try:
@@ -1048,6 +1057,7 @@ class Recorder:
                 "t3_prediction": s.get("t3_prediction"), "t3_prediction_outcome": outcomes["t3"],
                 "windrop": {p: s.get(f"windrop_{p}") for p in windrop.POINTS},
                 "windrop_outcome": windrop_outcomes,
+                "windrop_longshot": s.get("windrop_longshot_t2"), "windrop_longshot_outcome": windrop_longshot_outcome,
                 "windrop_dbl": {p: s.get(f"windrop_dbl_{p}") for p in windrop.DBL_POINTS},
                 "windrop_dbl_outcome": windrop_dbl_outcomes,
                 "windrop_combined": {p: s.get(f"windrop_combo_{p}") for p in windrop.DBL_COMBINED_POINTS},
@@ -1146,7 +1156,8 @@ def publish_windrops(recorder, archive, day, venue, meeting_id):
         try:
             body = {"schema": 1, "date": day, "venue": venue, "meeting_id": meeting_id, "race": n, "point": point,
                     "kind": "windrop", "post_time": s["post"].isoformat() if s.get("post") else None,
-                    "prediction": pred, "written_at": now().isoformat()}
+                    "prediction": pred, "longshot": s.get("windrop_longshot_t2") if point == "t2" else None,
+                    "written_at": now().isoformat()}
             if archive.put(f"{prediction_folder(day, venue)}/race-{n:02}-windrop-{point}-{archive.run}.json", body,
                            f"Windrop prediction R{n} at {point}"):
                 s[f"windrop_{point}_published"] = True

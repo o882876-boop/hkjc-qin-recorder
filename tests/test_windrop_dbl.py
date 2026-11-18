@@ -77,6 +77,17 @@ class Model(unittest.TestCase):
         c = windrop.PROB["dbl"]["first"]
         self.assertAlmostEqual(rows[0]["shorten_prob_10pct"], round(1 / (1 + math.exp(-(c["a10"] + c["b10"] * rows[0]["score"]))), 3))
 
+    def test_flag_list_follows_the_predicted_price_for_double_and_combined(self):
+        s, prev = pair("5")
+        for pred in (windrop.predict_dbl(s, prev, "first"), windrop.predict_dbl(s, prev, "t2"),
+                     windrop.predict_dbl(s, prev, "t2", combined=True)):
+            self.assertEqual(pred["flagged"], [h["horse"] for h in pred["horses"] if h["predicted_close_odds"] <= h["win_odds"] * 0.95 + 0.06])
+            self.assertIn("5", pred["flagged"])
+            self.assertEqual(pred["flag_rule"], windrop.FLAG_RULE)
+            self.assertIn("caught_of_fell_10pct", pred["flag_validation"])
+        out = windrop.windrop_outcome(windrop.predict_dbl(s, prev, "first"), {"after_start": {"odds": {**W2, "5": 9.0}}})
+        self.assertGreaterEqual(out["flagged_fell_10pct"], 1)
+
     def test_combined_adds_the_quinella_lead_and_flags_horses_with_both_signals(self):
         for point in ("t5", "t2"):
             s, prev = pair("5")
