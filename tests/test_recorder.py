@@ -48,7 +48,7 @@ class FakeRace:
 
     def snapshot(self, t):
         status, sell, win, shown, nodes = self.at(t)
-        runners = [{"no": str(i), "status": "Scratched" if i in self.scratched else "Declared", "standbyNo": ""}
+        runners = [{"no": str(i), "status": "Scratched" if i in self.scratched else "Declared", "standbyNo": "", "name_ch": f"馬{i}"}
                    for i in range(1, self.field + 1)]
         odds = []
         if nodes:
@@ -280,6 +280,10 @@ class FakeArchive:
 
     def put(self, path, payload, message):
         self.files[path] = json.dumps(payload)
+        return True
+
+    def put_text(self, path, text, message):
+        self.files[path] = text
         return True
 
 
