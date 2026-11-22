@@ -39,7 +39,7 @@ seconds after each target the T-5, T-3 and T-2 boards were taken.
 |---|---|
 | `before_rollover` | first poll after race N-1 stops selling (the off) |
 | `after_rollover` | 2 min after race N-1 WIN payout (`anchor` says if a fallback was used: result + 10 min, or off + 14 min) |
-| `t5`, `t3`, `t2` | 5 / 3 / 2 min before race N's post time; re-taken if HKJC moves the post time |
+| `t5`, `t3`, `t2`, `t1` | 5 / 3 / 2 / 1 min before race N's post time; re-taken if HKJC moves the post time. `t1` is recording only (no prediction is made at `t1`) and older archives have no `t1` |
 | `after_start` | first closed board at race N's off. If HKJC withdraws the board, `basis` starts with `FALLBACK_` and the last open board (at most 60 s old) is used |
 
 The per-combination `drop_pct` includes T-3 to T-2 and T-2 to the final board,
@@ -79,13 +79,13 @@ Each new race JSON includes `win_points` and `win_missing` at the same six targe
 
 The recorder also captures the Double pool, which pairs race N (leg 1) with race N+1 (leg 2) and closes at
 race N's off. For every race N that has a following race it stores four boards, all anchored to race N:
-`t5`, `t3`, `t2` (5/3/2 minutes before its post time) and `after_start` (first closed board at its off, with the
+`t5`, `t3`, `t2`, `t1` (5/3/2/1 minutes before its post time) and `after_start` (first closed board at its off, with the
 same labelled `FALLBACK_` rule as Quinella). There are no rollover points. The last race has no Double.
 
 Combinations are **ordered** (`"3-7"` = horse 3 in race N, horse 7 in race N+1; `"7-3"` is a different bet) and a
 board is only kept when the full leg-1 x leg-2 grid is present. Files:
 `odds-data:dbl-history/YYYY-MM-DD_VENUE/race-NN-RUN.json` (`NN` = leg-1 race, schema 1). `drop_pct` has
-`t5_to_t3`, `t3_to_t2`, `t2_to_after_start` and `t3_to_after_start`.
+`t5_to_t3`, `t3_to_t2`, `t2_to_t1`, `t1_to_after_start`, `t2_to_after_start` and `t3_to_after_start`.
 
 `leg2_void` says when the leg-2 race was abandoned, and `source_failures` counts failed Double polls; a Double
 whose pool could never be read has the reason `double_source_failed_or_rejected`. Records still open when the

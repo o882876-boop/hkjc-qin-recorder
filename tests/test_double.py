@@ -54,13 +54,13 @@ class DoubleRecording(unittest.TestCase):
         self.assertIn("1-2", pairs)
         self.assertIn("2-1", pairs)
         post, p = P1, record["points"]
-        for name, minutes in (("t5", 5), ("t3", 3), ("t2", 2)):
+        for name, minutes in (("t5", 5), ("t3", 3), ("t2", 2), ("t1", 1)):
             at = rec.stamp(p[name]["observed_at"])
             self.assertTrue(post - M(minutes) <= at <= post - M(minutes) + rec.WINDOW, name)
         self.assertEqual(p["after_start"]["basis"], "closed_board_after_stop_sell")
         self.assertEqual(p["after_start"]["sell_status"], "STOP_SELL")
         changes = record["combinations"][0]["drop_pct"]
-        self.assertEqual(set(changes), {"t5_to_t3", "t3_to_t2", "t2_to_after_start", "t3_to_after_start"})
+        self.assertEqual(set(changes), {"t5_to_t3", "t3_to_t2", "t2_to_t1", "t1_to_after_start", "t2_to_after_start", "t3_to_after_start"})
         json.dumps(record)
 
     def test_second_pair_is_anchored_to_its_own_leg1_off(self):
