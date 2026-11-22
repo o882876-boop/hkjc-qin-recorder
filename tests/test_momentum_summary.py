@@ -33,6 +33,11 @@ class Page(unittest.TestCase):
         self.assertEqual(ms.build_momentum("2026-11-22", "ST", {}, rec.predict_outcome), "")
         self.assertEqual(ms.build_momentum("2026-11-22", "ST", {1: {"t3_prediction": {"error": "x"}}}, rec.predict_outcome), "")
 
+    def test_newest_race_is_listed_first(self):
+        text = ms.build_momentum("2026-11-22", "ST", {1: race_state(), 2: race_state(), 3: race_state()}, rec.predict_outcome)
+        self.assertLess(text.index("### 第3場"), text.index("### 第2場"))
+        self.assertLess(text.index("### 第2場"), text.index("### 第1場"))
+
     def test_finished_race_shows_names_stars_and_the_check_against_what_happened(self):
         text = ms.build_momentum("2026-11-22", "ST", {1: race_state()}, rec.predict_outcome)
         self.assertIn("# 動量預測　2026-11-22　ST", text)
