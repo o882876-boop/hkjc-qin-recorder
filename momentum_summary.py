@@ -28,7 +28,7 @@ def _safe_outcome(outcome_fn, pred, s):
 
 
 def build_momentum(day, venue, state, outcome_fn):
-    races = sorted(n for n, s in state.items() if any(_ok(s.get(f"{p}_prediction")) for p in POINTS))
+    races = sorted((n for n, s in state.items() if any(_ok(s.get(f"{p}_prediction")) for p in POINTS)), reverse=True)  # newest race first
     if not races:
         return ""
     totals = {p: [0, 0, 0.0] for p in POINTS}
@@ -67,7 +67,7 @@ def build_momentum(day, venue, state, outcome_fn):
     tot = " ／ ".join(f"**{p}** {t[0]}/{t[1]}(運氣約 {t[2]:.1f})" for p, t in totals.items() if t[1])
     head = [f"# 動量預測　{day}　{venue}", "",
             "預測**邊啲馬喺該時間點之後會繼續落飛(賠率縮短)**,唔係預測邊匹贏,亦唔係投注建議。",
-            "排名按「由 t5 到該時間點已經落咗幾多」(連贏組合 + 獨贏)計;★ = 前 3 名;`之後落飛%` 喺賽後先有。", "",
+            "排名按「由 t5 到該時間點已經落咗幾多」(連贏組合 + 獨贏)計;★ = 前 3 名;`之後落飛%` 喺賽後先有。場次由新到舊(最新一場在最上)。", "",
             f"**今日累計命中(前 3 匹對實際落飛最多 3 匹)**:{tot or '未有完成場次'}", ""]
     note = ["_探索性:2 個賽日回測模型時睇過數據,偏樂觀;11/18 係未見過嘅數據(t3、t2 各 15/27,運氣約 6.8)。詳見 README。_", ""]
     return "\n".join(head + blocks + note)

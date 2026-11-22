@@ -115,7 +115,7 @@ def _race_section(n, s):
 
 def _overview(state):
     lines = ["| 場 | 開跑 | 連贏標出 | 孖寶標出 | 合併標出 | 冷馬旗標(≥20倍) | 冇飛(建議排除) |", "|---|---|---|---|---|---|---|"]
-    for n in sorted(state):
+    for n in sorted(state, reverse=True):
         s = state[n]
         qin, dbl, combo = _latest(s, QIN_KEYS), _latest(s, DBL_KEYS), _latest(s, COMBO_KEYS)
         if not (qin or dbl or combo):
@@ -128,7 +128,7 @@ def _overview(state):
 
 
 LEGEND = [
-    "**點睇**：每場一個表,頭一行係最新一個時間點嘅預測,按「縮短≥10%機會」由高到低。",
+    "**點睇**：場次由新到舊(最新一場在最上);每場一個表,頭一行係最新一個時間點嘅預測,按「縮短≥10%機會」由高到低。",
     "- **預計收盤 連/孖/合**：連贏預測 / 孖寶預測 / 兩者合併預測嘅預計獨贏收盤賠率;**縮短≥10%機會** 同樣三個,單位 %。",
     "- **標出**：預計收盤 ≤ 當下賠率×0.95(連=連贏、孖=孖寶、合=合併);冷=賠率≥20倍而連贏組合跌幅排全場前3;排除=連贏冇飛。",
     "- **連贏飛**：連贏佔% 大過獨贏佔% 為✅有飛;差距在 −1 個百分點內為➖打和(不排除);更細為❌冇飛(建議排除)。🔺=有飛而且連贏佔% 由過關後每一步都上升。",
@@ -141,7 +141,7 @@ LEGEND = [
 
 
 def build_summary(day, venue, state):
-    sections = [x for x in (_race_section(n, state[n]) for n in sorted(state)) if x]
+    sections = [x for x in (_race_section(n, state[n]) for n in sorted(state, reverse=True)) if x]
     if not sections:
         return ""
     lines = [f"# windrop 預測摘要　{day}　{venue}", "", "## 今日標出總表", ""] + _overview(state) + ["", "## 圖例", ""] + LEGEND + ["", "## 逐場", ""]
