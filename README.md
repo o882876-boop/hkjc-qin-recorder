@@ -39,7 +39,7 @@ seconds after each target the T-5, T-3 and T-2 boards were taken.
 |---|---|
 | `before_rollover` | first poll after race N-1 stops selling (the off) |
 | `after_rollover` | 2 min after race N-1 WIN payout (`anchor` says if a fallback was used: result + 10 min, or off + 14 min) |
-| `t5`, `t3`, `t2`, `t1` | 5 / 3 / 2 / 1 min before race N's post time; re-taken if HKJC moves the post time. `t1` is recording only (no prediction is made at `t1`) and older archives have no `t1` |
+| `t5`, `t3`, `t2`, `t1` | 5 / 3 / 2 / 1 min before race N's post time; re-taken if HKJC moves the post time. `t1` is recorded; only the Quinella windrop also predicts at `t1`, unvalidated (t2 fit reused, see docs/WINDROP.md), nothing else does and older archives have no `t1` |
 | `after_start` | first closed board at race N's off. If HKJC withdraws the board, `basis` starts with `FALLBACK_` and the last open board (at most 60 s old) is used |
 
 The per-combination `drop_pct` includes T-3 to T-2 and T-2 to the final board,
