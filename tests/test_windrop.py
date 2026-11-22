@@ -247,8 +247,8 @@ class WindropInMainLoop(unittest.TestCase):
     def test_each_race_gets_t5_t3_t2_windrop_files_before_the_race_and_repeats_them_in_its_record(self):
         self.run_main(base.card(3), P1 - M(45), "600")
         names = [p.rsplit("/", 1)[1] for p in self.files("predictions/") if "-windrop-" in p and "-windrop-dbl-" not in p]
-        self.assertEqual(names, sorted(f"race-0{i}-windrop-{pt}-600-1.json" for i in (1, 2, 3) for pt in ("t2", "t3", "t5")))
-        for point, early, late in (("t5", 6, 4), ("t3", 4, 2), ("t2", 3, 1)):
+        self.assertEqual(names, sorted(f"race-0{i}-windrop-{pt}-600-1.json" for i in (1, 2, 3) for pt in ("t1", "t2", "t3", "t5")))
+        for point, early, late in (("t5", 6, 4), ("t3", 4, 2), ("t2", 3, 1), ("t1", 2, 0)):
             for i in (1, 2, 3):
                 path = f"predictions/2026-11-11_HV/race-0{i}-windrop-{point}-600-1.json"
                 body = json.loads(base.FakeArchive.files[path])
@@ -267,6 +267,21 @@ class WindropInMainLoop(unittest.TestCase):
                     self.assertIn("windrop_longshot_outcome", record)
                 self.assertEqual(record["windrop"][point], body["prediction"])
                 self.assertIn(record["windrop_outcome"][point].get("top_hits", "missing"), range(0, 4) if "top_hits" in record["windrop_outcome"][point] else ["missing"])
+
+    def test_t1_is_recorded_one_minute_before_the_off_and_predicted_with_the_t2_fit_labelled_unvalidated(self):
+        self.run_main(base.card(3), P1 - M(45), "602")
+        record = json.loads(base.FakeArchive.files["qin-history/2026-11-11_HV/race-01-602-1.json"])
+        self.assertNotIn("t1", record["missing"])
+        point = record["points"]["t1"]
+        self.assertTrue(P1 - M(1) <= rec.stamp(point["observed_at"]) <= P1 - M(1) + rec.WINDOW)
+        pred = record["windrop"]["t1"]
+        self.assertNotIn("error", pred)
+        self.assertEqual(pred["validation"]["unvalidated"], True)
+        self.assertEqual(pred["flag_validation"]["coefs_from"], "t2")
+        self.assertEqual(pred["qin_fly_validation"]["unvalidated"], True)
+        self.assertEqual(set(record["windrop_outcome"]["t1"]) >= {"flagged_n", "flagged_fell_10pct"}, True)
+        self.assertEqual(windrop.COEFS["t1"], windrop.COEFS["t2"])
+        self.assertEqual(windrop.PROB["qin"]["t1"], windrop.PROB["qin"]["t2"])
 
     def test_a_windrop_bug_never_blocks_the_quinella_or_the_other_predictions(self):
         saved = windrop.predict_windrop
@@ -292,7 +307,7 @@ class WindropInMainLoop(unittest.TestCase):
             recorder.observe(meeting, pools, t)
             t += base.timedelta(seconds=8)
         due = recorder.make_windrops(t)
-        self.assertEqual(sorted(due), [(1, "t2"), (1, "t3"), (1, "t5")])
+        self.assertEqual(sorted(due), [(1, "t1"), (1, "t2"), (1, "t3"), (1, "t5")])
         for point in windrop.POINTS:
             recorder.state[1][f"windrop_{point}_published"] = True
         again = rec.Recorder.load(json.loads(json.dumps(recorder.dump())))

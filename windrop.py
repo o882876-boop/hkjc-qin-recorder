@@ -17,7 +17,7 @@ import math
 MODEL = "windrop_v1"
 TOP = 3
 MIN_HORSES = 6
-POINTS = ("t5", "t3", "t2")
+POINTS = ("t5", "t3", "t2", "t1")
 
 COEFS = {
     "t5": {"fav": 0.39634719, "lead": 0.46150613, "c0": -0.18838143, "c1": 0.39392643},
@@ -238,7 +238,7 @@ def qin_fly_fields(groups, point):
 # 16 races, races 2+ (192 runners, 20% shortened 10%+): going up at every step is only a weak helper (23% of 53; with qin fly 35% of 31 against
 # 33% of all fly horses; without fly 5%). Rise from rollover with fly: 5-10% -> 43%, 10%+ -> 40%, falling -> 22%. From t5 the signal is a bit clearer
 # (fly horses up 6%+ at t2: 50% of 14) and its mirror is the only usable exclusion: a share down 5%+ from t5 to t2 shortened 10%+ in 0 of 17 horses.
-RISE_POINTS = ("after_rollover", "t5", "t3", "t2")
+RISE_POINTS = ("after_rollover", "t5", "t3", "t2", "t1")
 FALL_EXCLUDE_PCT = -5.0
 QIN_RISE_VALIDATION = {"races": 16, "runners_with_rollover": 192, "fallers_base": 0.20,
                        "all_steps_up": {"n": 53, "fell_10pct": 0.23}, "fly_and_all_steps_up": {"n": 31, "fell_10pct": 0.35},
@@ -287,7 +287,7 @@ def add_qin_rise(s, point, rows):
             row["qin_rise_from_rollover_pct"] = round(100 * (values[point] / values["after_rollover"] - 1), 1)
         if "t5" in values and point != "t5":
             row["qin_rise_from_t5_pct"] = round(100 * (values[point] / values["t5"] - 1), 1)
-            if point == "t2" and row["qin_rise_from_t5_pct"] <= FALL_EXCLUDE_PCT:
+            if point in ("t2", "t1") and row["qin_rise_from_t5_pct"] <= FALL_EXCLUDE_PCT:
                 fall5.append(h)
         if row["qin_rise_all_steps"]:
             all_up.append(h)
@@ -309,6 +309,15 @@ FLAG_VALIDATION = {
     "combined": {"t5": {"flagged_per_race": 2.8, "flagged_fell_any": 0.73, "flagged_fell_10pct": 0.64, "caught_of_fell_10pct": 0.58},
                  "t2": {"flagged_per_race": 2.6, "flagged_fell_any": 0.74, "flagged_fell_10pct": 0.65, "caught_of_fell_10pct": 0.61}},
 }
+
+# t1 = one minute before the off. Added 2026-11-22 as an extra option: no t1 history exists, so it runs the t2 fit unchanged
+# (same coefficients, same price mapping) and every number it carries is labelled `unvalidated`. Judge it from the live scorecard.
+T1_NOTE = {"unvalidated": True, "coefs_from": "t2", "note": "t1 has no history of its own; t2 coefficients reused. Judge from the live scorecard."}
+COEFS["t1"] = dict(COEFS["t2"])
+PROB["qin"]["t1"] = dict(PROB["qin"]["t2"])
+VALIDATION["t1"] = dict(T1_NOTE)
+FLAG_VALIDATION["qin"]["t1"] = dict(T1_NOTE)
+QIN_FLY_VALIDATION["t1"] = dict(T1_NOTE)
 
 
 def flag_rows(rows):

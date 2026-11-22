@@ -12,7 +12,7 @@ import json
 from collections import defaultdict
 from pathlib import Path
 
-FAMILIES = (("windrop", "windrop_outcome", "Quinella (windrop_v1)", ("t5", "t3", "t2")),
+FAMILIES = (("windrop", "windrop_outcome", "Quinella (windrop_v1)", ("t5", "t3", "t2", "t1")),
             ("windrop_dbl", "windrop_dbl_outcome", "Double (windrop_dbl_v1)", ("first", "t5", "t2")),
             ("windrop_combined", "windrop_combined_outcome", "Combined (Double + Quinella)", ("t5", "t2")))
 
@@ -72,7 +72,8 @@ def render(records):
             v = expected.get((key, point)) or {}
             lines.append(f"| {title} | {point} | {int(t['races'])} | {fl / t['races']:.1f} | {pct(t['flagged_fell_any'], fl)} | {pct(f10, fl)} | "
                          f"{pct(f10, fell10_total)} | {t['brier_sum'] / t['horses']:.3f} | {pct(t['band'], t['horses'])} | "
-                         f"{100 * v.get('flagged_fell_10pct', 0):.0f}% / {100 * v.get('caught_of_fell_10pct', 0):.0f}% |")
+                         + ("unvalidated (t1: t2 fit reused) |" if v.get("unvalidated") else
+                            f"{100 * v.get('flagged_fell_10pct', 0):.0f}% / {100 * v.get('caught_of_fell_10pct', 0):.0f}% |"))
     fly_lines = []
     for key, _, title, points in FAMILIES:
         for point in points:
