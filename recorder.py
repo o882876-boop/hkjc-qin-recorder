@@ -25,6 +25,7 @@ from zoneinfo import ZoneInfo
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import windrop  # noqa: E402  (pure functions, no I/O)
 import windrop_summary  # noqa: E402
+import momentum_summary  # noqa: E402
 
 HK = ZoneInfo("Asia/Hong_Kong")
 ENDPOINT = "https://info.cld.hkjc.com/graphql/base-get/"
@@ -1239,6 +1240,25 @@ def publish_summary(recorder, archive, day, venue, force=False):
         log(f"windrop summary skipped ({type(error).__name__})")
 
 
+def publish_momentum(recorder, archive, day, venue, force=False):
+    """Keep `predictions/<date>_<venue>/momentum.md` current (t3/t2 momentum predictions + after-the-race check). Never raises."""
+    try:
+        text = momentum_summary.build_momentum(day, venue, recorder.state, predict_outcome)
+        if not text or text == getattr(recorder, "momentum_text", None):
+            return
+        last = getattr(recorder, "momentum_at", None)
+        if not force and last and now() - last < SUMMARY_MIN_GAP:
+            return
+        stamped = text + f"\n_更新：{now().astimezone(HK):%Y-%m-%d %H:%M:%S} HKT_\n"
+        if archive.put_text(f"{prediction_folder(day, venue)}/momentum.md", stamped, f"momentum summary {day} {venue}"):
+            recorder.momentum_text, recorder.momentum_at = text, now()
+            log("momentum summary updated")
+    except SystemExit:
+        raise
+    except Exception as error:  # noqa: BLE001 - the page must never stop the recorder
+        log(f"momentum summary skipped ({type(error).__name__})")
+
+
 def dbl_folder(day, venue):
     return f"dbl-history/{day}_{venue}"
 
@@ -1471,6 +1491,7 @@ def main():
         publish_windrops(recorder, archive, day, venue, meeting_id)
         publish_windrops_dbl(recorder, archive, day, venue, meeting_id)
         publish_summary(recorder, archive, day, venue)
+        publish_momentum(recorder, archive, day, venue)
         if recorder.dbl_wanted(captured):
             try:                              # isolated: a Double failure must never disturb the Quinella loop
                 dbl = odds_pools(day, venue, ("DBL",))
@@ -1502,6 +1523,7 @@ def main():
         if all("published" in recorder.state.get(int(r["no"]), {}) for r in meeting["races"]):
             settle_doubles(recorder, archive, day, venue, meeting_id)
             publish_summary(recorder, archive, day, venue, force=True)
+            publish_momentum(recorder, archive, day, venue, force=True)
             log("All races archived.")
             return
         elapsed = now() - started
@@ -1519,6 +1541,7 @@ def main():
                         log(f"Race {n} archived incomplete; missing {record['missing']}")
             settle_doubles(recorder, archive, day, venue, meeting_id)
             publish_summary(recorder, archive, day, venue, force=True)
+            publish_momentum(recorder, archive, day, venue, force=True)
             raise SystemExit("Meeting window ended before every race completed.")
         pause(recorder, time.monotonic() - tick)
     state = {"saved_at": now().isoformat(), "meeting_id": meeting_id, "state": recorder.dump()}
