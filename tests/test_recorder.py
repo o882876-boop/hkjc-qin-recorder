@@ -112,6 +112,7 @@ class SnapshotPoints(unittest.TestCase):
         self.assertTrue(post2 - M(5) <= obs(r2, "t5") <= post2 - M(5) + rec.WINDOW)
         self.assertTrue(post2 - M(3) <= obs(r2, "t3") <= post2 - M(3) + rec.WINDOW)
         self.assertTrue(post2 - M(2) <= obs(r2, "t2") <= post2 - M(2) + rec.WINDOW)
+        self.assertTrue(post2 - M(1) <= obs(r2, "t1") <= post2 - M(1) + rec.WINDOW)
         changes = r2["combinations"][0]["drop_pct"]
         self.assertIn("t3_to_t2", changes)
         self.assertIn("t2_to_after_start", changes)
@@ -132,7 +133,7 @@ class SnapshotPoints(unittest.TestCase):
         _, pub = simulate(card(), P1 - M(45), P1 + M(5))
         r1 = pub[1][1]
         self.assertEqual(r1["missing"], {"before_rollover": "first_race", "after_rollover": "first_race"})
-        self.assertTrue(all(r1["points"][k] for k in ("t5", "t3", "t2", "after_start")))
+        self.assertTrue(all(r1["points"][k] for k in ("t5", "t3", "t2", "t1", "after_start")))
 
 
 class StatusAndTiming(unittest.TestCase):
