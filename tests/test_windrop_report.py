@@ -80,3 +80,12 @@ class BacktestScript(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class T1Row(unittest.TestCase):
+    def test_a_t1_row_is_shown_as_unvalidated_not_as_zero_percent(self):
+        pred = {"model": "windrop_v1", "at_point": "t1", "flag_validation": {"unvalidated": True, "coefs_from": "t2"}}
+        out = {"flagged_n": 2, "flagged_fell_any": 1, "flagged_fell_10pct": 1, "missed_fell_10pct": 1, "horses": [{"brier_10pct": 0.1, "in_50pct_band": True}]}
+        text = report.render([{"windrop": {"t1": pred}, "windrop_outcome": {"t1": out}}])
+        row = next(line for line in text.splitlines() if "| t1 |" in line)
+        self.assertIn("unvalidated", row)

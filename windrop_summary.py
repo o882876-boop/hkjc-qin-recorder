@@ -5,7 +5,7 @@ Pure functions, no I/O. `build_summary(day, venue, state)` takes the recorder st
 Everything shown is what the predictions already say (see docs/WINDROP.md); nothing is recomputed except the after-the-race column.
 """
 STATE_TEXT = {"fly": "✅有飛", "tie": "➖打和", "no_fly": "❌冇飛"}
-QIN_KEYS = ("windrop_t2", "windrop_t3", "windrop_t5")
+QIN_KEYS = ("windrop_t1", "windrop_t2", "windrop_t3", "windrop_t5")
 DBL_KEYS = ("windrop_dbl_t2", "windrop_dbl_t5", "windrop_dbl_first")
 COMBO_KEYS = ("windrop_combo_t2", "windrop_combo_t5")
 
@@ -74,7 +74,7 @@ def _race_section(n, s):
         return 0
 
     horses.sort(key=sort_key)
-    head = (f"### 第{n}場　開跑 {_hhmm(s.get('post'))}　｜　連贏 {_times(s, QIN_KEYS[::-1], ('t5', 't3', 't2'))}"
+    head = (f"### 第{n}場　開跑 {_hhmm(s.get('post'))}　｜　連贏 {_times(s, QIN_KEYS[::-1], ('t5', 't3', 't2', 't1'))}"
             f"　孖寶 {_times(s, DBL_KEYS[::-1], ('first', 't5', 't2'))}")
     out = [head, "",
            "| 馬號 | 馬名 | 賠率 | 連贏佔% | 獨贏佔% | 差(百分點) | 連贏飛 | 連贏佔%：過關後→t5→t3→t2 | 孖寶edge | 預計收盤 連/孖/合 | 縮短≥10%機會 連/孖/合 | 標出 | 賽後 收盤(縮短) |",
@@ -133,6 +133,7 @@ LEGEND = [
     "- **標出**：預計收盤 ≤ 當下賠率×0.95(連=連贏、孖=孖寶、合=合併);冷=賠率≥20倍而連贏組合跌幅排全場前3;排除=連贏冇飛。",
     "- **連贏飛**：連贏佔% 大過獨贏佔% 為✅有飛;差距在 −1 個百分點內為➖打和(不排除);更細為❌冇飛(建議排除)。🔺=有飛而且連贏佔% 由過關後每一步都上升。",
     "- **連贏佔%路徑**：由過關後到 t5、t3、t2 嘅連贏佔%;⬆=每步上升,⬇=t5到t2跌5%以上。",
+    "- **t1**：連贏預測加咗開跑前 1 分鐘(t1),用 t2 嘅係數,**未驗證**,見到 t1 就當試驗數字。",
     "- **孖寶edge**：第1腿停賣後第一張獨贏比孖寶暗示價長幾多(正=預期縮短)。",
     "- **賽後 收盤(縮短)**：獨贏收盤賠率,括號內由預測點到收盤,**+ 係縮短(落飛)**、− 係拉長。",
     "",

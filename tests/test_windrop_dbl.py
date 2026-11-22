@@ -237,7 +237,7 @@ class InMainLoop(unittest.TestCase):
         self.assertEqual(len(self.files("dbl-history/")), 2)
         body = json.loads(base.FakeArchive.files[next(p for p in self.files("predictions/") if "-windrop-dbl-" in p)])
         self.assertEqual(body["prediction"]["error"], "ZeroDivisionError")
-        self.assertEqual(len([p for p in self.files("predictions/") if "-windrop-" in p and "-windrop-dbl-" not in p]), 9)
+        self.assertEqual(len([p for p in self.files("predictions/") if "-windrop-" in p and "-windrop-dbl-" not in p]), 12)
 
 
 if __name__ == "__main__":

@@ -101,6 +101,7 @@ Recorder (`recorder.py`, state in `make_windrops`, `make_windrops_dbl`; files in
 point, the moment the board is in (before the race), to the private `odds-data` branch:
 
 - `predictions/<date>_<venue>/race-NN-windrop-<t5|t3|t2>-<run>.json` (`prediction` = Quinella, `longshot` at t2)
+- `predictions/<date>_<venue>/race-NN-windrop-t1-<run>.json` — **t1** (one minute before the off, added 2026-11-22 as an extra option): Quinella only, runs the t2 fit unchanged, every validation field is `{"unvalidated": true, "coefs_from": "t2"}`. The recorder also stores the t1 WIN and Quinella boards (`points.t1`) and the `t2_to_t1`, `t1_to_after_start` changes (`t2_to_after_start` is kept). Judge t1 from the live scorecard (`report.py`), not from the validation tables.
 - `predictions/<date>_<venue>/race-NN-windrop-dbl-<first|t5|t2>-<run>.json` (`prediction` = Double, `combined` = Double + Quinella, null at `first`)
 - `predictions/<date>_<venue>/summary.md` — **the readable one**: a markdown page (horse names, per-race table, flagged list, 有飛/打和/冇飛,
   share path, edge, predicted close, and after the race the actual close and shortening) rewritten during the race day (`windrop_summary.py`,

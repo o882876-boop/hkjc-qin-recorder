@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import windrop  # noqa: E402
 
 POINTS = ("before_rollover", "t5", "t3", "t2")
+RISE_POINTS = windrop.RISE_POINTS[:-1]      # t1 has no history: the validation tables use the four original points
 THRESHOLD = 10.0                        # % shortening that counts as "落飛"
 FLAG_LOG = math.log(1 / 0.95)           # flag rule: predicted close <= price now x 0.95
 
@@ -69,7 +70,7 @@ def load_races(data, days=None):
                       and all(h in boards[k] for k in ("t5", "t3", "t2")) and (not first_ok or (win["before_rollover"].get(h) and h in boards["before_rollover"]))]
             if len(horses) < windrop.MIN_HORSES:
                 continue
-            path = {pt: {h: 100 * v for h, v in windrop.qin_shares(board(q, pt)).items()} for pt in windrop.RISE_POINTS if (q["points"] or {}).get(pt)}
+            path = {pt: {h: 100 * v for h, v in windrop.qin_shares(board(q, pt)).items()} for pt in RISE_POINTS if (q["points"] or {}).get(pt)}
             race = {"race": (day_dir.name, n), "horses": horses, "feat": {}, "y": {}, "ly": {}, "w": {}, "dbl": False, "path": path,
                     "qin_t5": board(q, "t5"), "qin_t2": board(q, "t2"), "win_t2": win["t2"], "win_close": win["after_start"]}
             for point in (k for k in POINTS if k in win and k in boards and (k != "before_rollover" or first_ok)):
@@ -220,9 +221,9 @@ def rise_summary(races):
         for i, h in enumerate(r["horses"]):
             fell = r["y"]["t2"][i] >= THRESHOLD
             is_fly = r["gap"]["t2"][i] > 0
-            if "after_rollover" in path and all(h in path[pt] for pt in windrop.RISE_POINTS):
+            if "after_rollover" in path and all(h in path[pt] for pt in RISE_POINTS):
                 total["n"] += 1; total["f"] += fell
-                up = all(path[b][h] > path[a][h] for a, b in zip(windrop.RISE_POINTS, windrop.RISE_POINTS[1:]))
+                up = all(path[b][h] > path[a][h] for a, b in zip(RISE_POINTS, RISE_POINTS[1:]))
                 for grp, ok in ((allup, up), (flyup, up and is_fly), (fly, is_fly), (nofly_up, up and not is_fly)):
                     grp["n"] += ok; grp["f"] += ok and fell
             if all(h in path[pt] for pt in ("t5", "t2")) and 100 * (path["t2"][h] / path["t5"][h] - 1) <= windrop.FALL_EXCLUDE_PCT:
