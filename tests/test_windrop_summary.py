@@ -27,6 +27,18 @@ class SummaryInMainLoop(unittest.TestCase):
         self.assertIn("HKT", text)
         self.assertEqual(sum(1 for p in base.FakeArchive.files if p.endswith("summary.md")), 1)
 
+    def test_newest_race_is_listed_first_in_the_overview_and_the_race_sections(self):
+        pred = {"model": "windrop_v1", "at_point": "t2", "flagged": [],
+                "horses": [{"horse": "1", "rank": 1, "score": 1.0, "win_odds": 5.0, "shorten_prob_10pct": .5, "shorten_prob_any": .6,
+                            "predicted_close_odds": 4.5, "predicted_drop_pct": 10.0, "win_implied_pct": 20.0, "qin_support_pct": 22.0,
+                            "lead_pct": 10.0, "predicted_close_low": 4.0, "predicted_close_high": 5.0}]}
+        state = {n: {"windrop_t2": pred, "names": {"1": f"馬{n}"}} for n in (1, 2, 3)}
+        text = windrop_summary.build_summary("2026-11-22", "ST", state)
+        rows = [line.split("|")[1].strip() for line in text.splitlines() if line.startswith("| ") and line.split("|")[1].strip().isdigit()]
+        self.assertEqual(rows[:3], ["3", "2", "1"])
+        self.assertLess(text.index("馬3"), text.index("馬2"))
+        self.assertLess(text.index("馬2"), text.index("馬1"))
+
     def test_empty_or_error_state_gives_no_summary_and_never_raises(self):
         self.assertEqual(windrop_summary.build_summary("2026-11-11", "HV", {}), "")
         self.assertEqual(windrop_summary.build_summary("2026-11-11", "HV", {1: {"windrop_t2": {"error": "x"}}}), "")
