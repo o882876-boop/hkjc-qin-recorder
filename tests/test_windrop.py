@@ -278,7 +278,7 @@ class WindropInMainLoop(unittest.TestCase):
         self.assertEqual(len(self.files("qin-history/")), 3)
         body = json.loads(base.FakeArchive.files[next(p for p in self.files("predictions/") if "-windrop-" in p and "-windrop-dbl-" not in p)])
         self.assertEqual(body["prediction"]["error"], "ZeroDivisionError")
-        self.assertEqual(len([p for p in self.files("predictions/") if "-windrop-" not in p and not p.endswith("summary.md")]), 6)
+        self.assertEqual(len([p for p in self.files("predictions/") if "-windrop-" not in p and not p.endswith(".md")]), 6)
         for path in self.files("qin-history/"):
             record = json.loads(base.FakeArchive.files[path])
             self.assertTrue(all(record["points"][k] for k in ("t5", "t3", "t2", "after_start")))

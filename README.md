@@ -220,3 +220,10 @@ Rows also carry the Quinella-pool share path after_rollover -> t5 -> t3 -> t2 (`
 a weak helper on top of qin fly (fly + every step up 35% of 31; no fly + every step up 5%). See docs/WINDROP.md.
 
 `qin_fly_and_rising` lists the horses that are qin fly now and rose at every step from the previous payout (35% of 31 shortened 10%+, fly alone 33%).
+
+## `momentum.md`: the t3/t2 predictions on one page
+
+`odds-data:predictions/YYYY-MM-DD_VENUE/momentum.md` (next to windrop's `summary.md`) is rewritten whenever a prediction or a race result changes
+(at most every 45 s): one table per race with the `t3` and `t2` ranks (★ = top 3), horse names, WIN price and the drop before the point,
+and after the race the drop from the point to the close, the three horses that really kept shortening, hits against chance, and a running total
+for the day. Open it on GitHub (phone or desktop). A bug in it only skips the page (`momentum summary skipped` in the log), never a record.
