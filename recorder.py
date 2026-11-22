@@ -1099,8 +1099,21 @@ class Archive:
             raise
 
     def read(self, path):
+        """Parsed JSON of a stored file. The contents API only inlines files up to 1 MB (`content` comes back empty above
+        that, which once made a 1.6 MB hand-over file read as nothing), so larger files are fetched as a git blob (up to 100 MB)."""
         item = self._call("GET", path)
-        return json.loads(base64.b64decode(item["content"]))
+        content = item.get("content") if isinstance(item, dict) else None
+        if content:
+            return json.loads(base64.b64decode(content))
+        sha = item.get("sha") if isinstance(item, dict) else None
+        if not sha:
+            raise ValueError(f"{path}: no content and no sha in the contents API reply")
+        blob = request(f"https://api.github.com/repos/{self.repo}/git/blobs/{sha}",
+                       {"Authorization": f"Bearer {self.token}", "Accept": "application/vnd.github+json",
+                        "User-Agent": "qin-recorder"}, timeout=45)
+        if not isinstance(blob, dict) or not blob.get("content"):
+            raise ValueError(f"{path}: blob {sha} returned no content")
+        return json.loads(base64.b64decode(blob["content"]))
 
     def put_text(self, path, text, message):
         """Create or replace a text file (replacing needs the stored file's sha). True when stored."""
@@ -1441,15 +1454,20 @@ def main():
     meeting_id, venue = candidates[0]["id"], candidates[0]["venueCode"]
     total = len(candidates[0]["races"])
     archive = Archive()
-    done, handoff = set(), None
+    done, handoff, read_failed = set(), None, False
     for attempt in range(3):
         try:
             done = archived_races(archive, day, venue)
             handoff = load_handoff(archive, day, venue)
+            read_failed = False
             break
         except (OSError, ValueError, KeyError, TypeError) as error:
-            log(f"Could not read the archive ({type(error).__name__}); attempt {attempt + 1}/3")
+            read_failed = True
+            log(f"Could not read the archive ({type(error).__name__}: {error}); attempt {attempt + 1}/3")
             time.sleep(5)
+    if read_failed:
+        log("WARNING: the archive or the hand-over state could not be read; this run starts WITHOUT the previous run's state, "
+            "so races already under way will have gaps.")
     log(f"Meeting {day} {venue}: {total} races; already archived: {sorted(done) or 'none'}")
     if len(done) >= total:
         print("All races already archived.")
