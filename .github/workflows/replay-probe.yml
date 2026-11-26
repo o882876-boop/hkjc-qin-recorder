@@ -1,0 +1,30 @@
+name: replay-probe
+on:
+  push:
+    branches: [replay-probe]
+    paths: ["replay_probe/request.json"]
+permissions:
+  contents: write
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install playwright && playwright install --with-deps chromium
+      - name: Run probe
+        run: |
+          URL=$(python -c "import json;print(json.load(open('replay_probe/request.json'))['url'])")
+          mkdir -p out
+          python replay_probe/probe.py "$URL" out 12 10
+      - name: Save results to branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout --orphan replay-probe-out
+          git rm -rf --quiet . || true
+          mkdir -p result && cp out/* result/
+          git add result && git commit -qm "replay probe result" 
+          git push -f origin replay-probe-out
