@@ -20,7 +20,10 @@ jobs:
           mkdir -p out
           python replay_probe/probe.py "$URL" out 12 10
       - name: Download replay and extract frames
+        continue-on-error: true
         run: |
+          exec > >(tee out/log.txt) 2>&1
+          set -x
           MP4=$(python -c "import json;print(json.load(open('replay_probe/request.json'))['mp4'])")
           curl -sS -L --fail -m 300 -H "Referer: https://racing.hkjc.com/" -o replay.mp4 "$MP4"
           ls -l replay.mp4
@@ -31,6 +34,7 @@ jobs:
             S=$((i*9+1)); ffmpeg -v error -start_number $S -i out/frames/f_%03d.jpg -frames:v 1 -vf "tile=3x3" -q:v 4 out/sheets/sheet_$i.jpg 2>/dev/null || true
           done
       - name: Save results to branch
+        if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
