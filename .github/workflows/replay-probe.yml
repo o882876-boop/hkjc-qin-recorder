@@ -19,12 +19,23 @@ jobs:
           URL=$(python -c "import json;print(json.load(open('replay_probe/request.json'))['url'])")
           mkdir -p out
           python replay_probe/probe.py "$URL" out 12 10
+      - name: Download replay and extract frames
+        run: |
+          MP4=$(python -c "import json;print(json.load(open('replay_probe/request.json'))['mp4'])")
+          curl -sS -L --fail -m 300 -H "Referer: https://racing.hkjc.com/" -o replay.mp4 "$MP4"
+          ls -l replay.mp4
+          ffprobe -v error -show_entries format=duration:stream=width,height,r_frame_rate -of default=nw=1 replay.mp4 | tee out/ffprobe.txt
+          mkdir -p out/frames out/sheets
+          ffmpeg -v error -i replay.mp4 -vf "fps=1/2,scale=640:-1" -q:v 4 out/frames/f_%03d.jpg
+          for i in 0 1 2 3 4 5 6 7; do
+            S=$((i*9+1)); ffmpeg -v error -start_number $S -i out/frames/f_%03d.jpg -frames:v 1 -vf "tile=3x3" -q:v 4 out/sheets/sheet_$i.jpg 2>/dev/null || true
+          done
       - name: Save results to branch
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout --orphan replay-probe-out
           git rm -rf --quiet . || true
-          mkdir -p result && cp out/* result/
+          mkdir -p result && cp -r out/* result/
           git add result && git commit -qm "replay probe result" 
           git push -f origin replay-probe-out
