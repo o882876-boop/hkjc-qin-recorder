@@ -1,0 +1,176 @@
+{
+  "url": "https://racing.hkjc.com/contentAsset/videoplayer_v4/video-player-iframe_v4.html?type=replay-full&date=20261122&no=01&lang=eng&noPTbar=false&noLeading=false&videoParam=PD",
+  "frames": [
+    {
+      "file": "out/frame_00.png",
+      "video": [
+        {
+          "t": 3.417379,
+          "rs": 4,
+          "w": 1920,
+          "h": 1080,
+          "paused": false,
+          "src": "https://streaminghkjc-a.akamaihd.net/hdflash/replay-full/2026/20261122/01/eng/replay-full_20261122_01_eng_1200kbps.mp4"
+        }
+      ]
+    },
+    {
+      "file": "out/frame_01.png",
+      "video": [
+        {
+          "t": 13.697247,
+          "rs": 4,
+          "w": 1920,
+          "h": 1080,
+          "paused": false,
+          "src": "https://streaminghkjc-a.akamaihd.net/hdflash/replay-full/2026/20261122/01/eng/replay-full_20261122_01_eng_1200kbps.mp4"
+        }
+      ]
+    },
+    {
+      "file": "out/frame_02.png",
+      "video": [
+        {
+          "t": 23.959462,
+          "rs": 4,
+          "w": 1920,
+          "h": 1080,
+          "paused": false,
+          "src": "https://streaminghkjc-a.akamaihd.net/hdflash/replay-full/2026/20261122/01/eng/replay-full_20261122_01_eng_1200kbps.mp4"
+        }
+      ]
+    },
+    {
+      "file": "out/frame_03.png",
+      "video": [
+        {
+          "t": 34.209834,
+          "rs": 4,
+          "w": 1920,
+          "h": 1080,
+          "paused": false,
+          "src": "https://streaminghkjc-a.akamaihd.net/hdflash/replay-full/2026/20261122/01/eng/replay-full_20261122_01_eng_1200kbps.mp4"
+        }
+      ]
+    },
+    {
+      "file": "out/frame_04.png",
+      "video": [
+        {
+          "t": 44.468824,
+          "rs": 4,
+          "w": 1920,
+          "h": 1080,
+          "paused": false,
+          "src": "https://streaminghkjc-a.akamaihd.net/hdflash/replay-full/2026/20261122/01/eng/replay-full_20261122_01_eng_1200kbps.mp4"
+        }
+      ]
+    },
+    {
+      "file": "out/frame_05.png",
+      "video": [
+        {
+          "t": 54.637507,
+          "rs": 4,
+          "w": 1920,
+          "h": 1080,
+          "paused": false,
+          "src": "https://streaminghkjc-a.akamaihd.net/hdflash/replay-full/2026/20261122/01/eng/replay-full_20261122_01_eng_1200kbps.mp4"
+        }
+      ]
+    },
+    {
+      "file": "out/frame_06.png",
+      "video": [
+        {
+          "t": 64.856477,
+          "rs": 4,
+          "w": 1920,
+          "h": 1080,
+          "paused": false,
+          "src": "https://streaminghkjc-a.akamaihd.net/hdflash/replay-full/2026/20261122/01/eng/replay-full_20261122_01_eng_1200kbps.mp4"
+        }
+      ]
+    },
+    {
+      "file": "out/frame_07.png",
+      "video": [
+        {
+          "t": 75.087692,
+          "rs": 4,
+          "w": 1920,
+          "h": 1080,
+          "paused": false,
+          "src": "https://streaminghkjc-a.akamaihd.net/hdflash/replay-full/2026/20261122/01/eng/replay-full_20261122_01_eng_1200kbps.mp4"
+        }
+      ]
+    },
+    {
+      "file": "out/frame_08.png",
+      "video": [
+        {
+          "t": 85.409593,
+          "rs": 4,
+          "w": 1920,
+          "h": 1080,
+          "paused": false,
+          "src": "https://streaminghkjc-a.akamaihd.net/hdflash/replay-full/2026/20261122/01/eng/replay-full_20261122_01_eng_1200kbps.mp4"
+        }
+      ]
+    },
+    {
+      "file": "out/frame_09.png",
+      "video": [
+        {
+          "t": 95.664264,
+          "rs": 4,
+          "w": 1920,
+          "h": 1080,
+          "paused": false,
+          "src": "https://streaminghkjc-a.akamaihd.net/hdflash/replay-full/2026/20261122/01/eng/replay-full_20261122_01_eng_1200kbps.mp4"
+        }
+      ]
+    },
+    {
+      "file": "out/frame_10.png",
+      "video": [
+        {
+          "t": 105.959147,
+          "rs": 4,
+          "w": 1920,
+          "h": 1080,
+          "paused": false,
+          "src": "https://streaminghkjc-a.akamaihd.net/hdflash/replay-full/2026/20261122/01/eng/replay-full_20261122_01_eng_1200kbps.mp4"
+        }
+      ]
+    },
+    {
+      "file": "out/frame_11.png",
+      "video": [
+        {
+          "t": 116.264217,
+          "rs": 4,
+          "w": 1920,
+          "h": 1080,
+          "paused": false,
+          "src": "https://streaminghkjc-a.akamaihd.net/hdflash/replay-full/2026/20261122/01/eng/replay-full_20261122_01_eng_1200kbps.mp4"
+        }
+      ]
+    }
+  ],
+  "title": "Race Replay - Racing Information - Horse Racing - The Hong Kong Jockey Club",
+  "media_requests": [
+    "https://racing.hkjc.com/contentAsset/api/getVideoInfo",
+    "https://racing.hkjc.com/contentAsset/videoplayer_v4/css/videoplayer_style.css",
+    "https://racing.hkjc.com/contentAsset/videoplayer_v4/images/loader_new.gif",
+    "https://racing.hkjc.com/contentAsset/videoplayer_v4/jcPlayer/JCPlayer.js",
+    "https://racing.hkjc.com/contentAsset/videoplayer_v4/jcPlayer/jcPlayer.css",
+    "https://racing.hkjc.com/contentAsset/videoplayer_v4/jcPlayer/jcPlayerClient.js",
+    "https://racing.hkjc.com/contentAsset/videoplayer_v4/jcPlayer/lang/zh-TW.js",
+    "https://racing.hkjc.com/contentAsset/videoplayer_v4/jcPlayer/video-js.min.css",
+    "https://racing.hkjc.com/contentAsset/videoplayer_v4/jcPlayer/video.min.js",
+    "https://racing.hkjc.com/contentAsset/videoplayer_v4/video-player-iframe_v4.html?type=replay-full&date=20261122&no=01&lang=eng&noPTbar=false&noLeading=false&videoParam=PD",
+    "https://streaminghkjc-a.akamaihd.net/hdflash/replay-full/2026/20261122/01/eng/replay-full_20261122_01_eng_1200kbps.mp4",
+    "https://streaminghkjc-a.akamaihd.net/hdflash/replay-full/2026/20261122/01/eng/replay-full_20261122_01_eng_2500kbps.mp4"
+  ]
+}

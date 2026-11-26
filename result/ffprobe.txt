@@ -1,0 +1,5 @@
+width=1920
+height=1080
+r_frame_rate=25/1
+r_frame_rate=0/0
+duration=120.360000
