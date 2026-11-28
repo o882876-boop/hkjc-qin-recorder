@@ -70,9 +70,23 @@ def card(n=3, per_race=None):
     return [FakeRace(i, P1 + M(30 * (i - 1)), **(per_race or {}).get(i, {})) for i in range(1, n + 1)]
 
 
+def pool_list(races, t):
+    """Pool totals as HKJC lists them on the meeting: they grow with the clock so every point carries a different total."""
+    grow = int((t - P1).total_seconds())
+    out = []
+    for r in races:
+        for kind, base_amount in (("WIN", 100000), ("QIN", 50000), ("QPL", 40000), ("PLA", 30000)):
+            out.append({"id": f"{MID}{kind}{r.no}", "oddsType": kind, "leg": {"number": r.no, "races": [r.no]},
+                        "investment": str(base_amount * r.no + grow), "lastUpdateTime": t.isoformat()})
+        if r.no < len(races):
+            out.append({"id": f"{MID}DBL{r.no}", "oddsType": "DBL", "leg": {"number": r.no, "races": [r.no, r.no + 1]},
+                        "investment": str(20000 * r.no + grow), "lastUpdateTime": t.isoformat()})
+    return out
+
+
 def meeting_at(races, t):
     data = [r.snapshot(t) for r in races]
-    return ({"id": MID, "date": DAY, "venueCode": "HV", "races": [d[0] for d in data]},
+    return ({"id": MID, "date": DAY, "venueCode": "HV", "races": [d[0] for d in data], "poolInvs": pool_list(races, t)},
             [p for d in data for p in d[1]])
 
 
@@ -419,3 +433,43 @@ class T10Point(unittest.TestCase):
             self.assertIn(pair, names)
         self.assertNotIn(("after_rollover", "t10"), names)
         self.assertNotIn(("t1", "t10"), names)
+
+
+class PoolTotals(unittest.TestCase):
+    """Pool totals (HK$) are recorded next to every Quinella board point and every Double board point; they feed no prediction."""
+
+    def test_parser_keeps_good_totals_and_drops_bad_ones(self):
+        meeting = {"poolInvs": [
+            {"oddsType": "WIN", "leg": {"races": [3]}, "investment": "1234", "lastUpdateTime": "2026-11-29T13:00:00+08:00"},
+            {"oddsType": "DBL", "leg": {"races": [3, 4]}, "investment": "999"},
+            {"oddsType": "TCE", "leg": {"races": [3]}, "investment": "5"},
+            {"oddsType": "QIN", "leg": {"races": [3]}, "investment": "not a number"},
+            {"oddsType": "QPL", "leg": {"races": []}, "investment": "7"},
+            {"oddsType": "PLA", "leg": {"races": [3]}, "investment": "-4"}]}
+        got = rec.pool_investments(meeting)
+        self.assertEqual(got, {3: {"WIN": {"investment": 1234, "updated_at": "2026-11-29T13:00:00+08:00"},
+                                   "DBL": {"investment": 999, "updated_at": None}}})
+        self.assertEqual(rec.pool_investments({}), {})
+
+    def test_every_board_point_carries_its_own_pool_totals(self):
+        _, pub = simulate(card(3), P1 - M(45), P1 + M(35))
+        r1 = pub[1][1]
+        seen = []
+        for name in ("t10", "t5", "t3", "t2", "t1", "after_start"):
+            pools = r1["points"][name]["pools"]
+            self.assertEqual(set(pools), {"WIN", "PLA", "QIN", "QPL"}, name)
+            self.assertNotIn("DBL", pools)
+            seen.append(pools["WIN"]["investment"])
+        self.assertEqual(seen, sorted(seen))           # pools only grow
+        self.assertEqual(len(set(seen)), len(seen))    # every point has its own total
+
+    def test_missing_pool_list_leaves_points_without_pools(self):
+        races = card(2)
+        recorder, t = rec.Recorder(), P1 - M(45)
+        while t <= P1 + M(35):
+            meeting, pools = meeting_at(races, t)
+            meeting.pop("poolInvs")
+            recorder.observe(meeting, pools, t)
+            t += timedelta(seconds=8)
+        self.assertTrue(recorder.state[1]["points"]["t5"])
+        self.assertNotIn("pools", recorder.state[1]["points"]["t5"])

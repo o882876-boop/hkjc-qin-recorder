@@ -162,3 +162,11 @@ and no odds, take-out or payout were modelled.
 3. Update the numbers in `VALIDATION`, `FLAG_VALIDATION`, `DBL_VALIDATION`, `LONGSHOT_VALIDATION`, `README.md` and the project memory
    (`o882876-boop/hkjc-odds` `memory/`) together, from `backtest.py` output of the shipped definitions.
 4. Not done yet: Excel output (JSON first, by request), a value/payout analysis, per-venue or per-class fits.
+
+
+## t10 (added 2026-11-28)
+
+`windrop_v1` also runs at `t10` (ten minutes before the off, file `race-NN-windrop-t10-RUN.json`). No t10 history exists, so it uses the t5 fit
+unchanged (WIN price now + Quinella lead, no WIN momentum) and every validation block is marked `unvalidated`. It has no share path and no rise
+fields. Predictions at t5, t3, t2 and t1 gain two information-only fields when a t10 board exists: `qin_move_pct_t10_to_now` (Quinella share now /
+share at t10 - 1) and `win_move_pct_t10_to_now` (WIN price shortening since t10). They are not scored and change no score, rank or flag.

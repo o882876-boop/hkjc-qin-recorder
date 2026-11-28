@@ -17,7 +17,7 @@ import math
 MODEL = "windrop_v1"
 TOP = 3
 MIN_HORSES = 6
-POINTS = ("t5", "t3", "t2", "t1")
+POINTS = ("t5", "t3", "t2", "t1", "t10")   # t10 last: every earlier point keeps its own prefix of this tuple
 
 COEFS = {
     "t5": {"fav": 0.39634719, "lead": 0.46150613, "c0": -0.18838143, "c1": 0.39392643},
@@ -192,7 +192,7 @@ def qin_fly_state(gap):
 def qin_fly_table(s, upto):
     """{point: {horse: (qin_pct, win_pct)}} at t5, t3, t2 up to `upto`, from the stored boards (WIN normalised over the same horses)."""
     out = {}
-    for point in POINTS[:POINTS.index(upto) + 1]:
+    for point in (("t10",) if upto == "t10" else POINTS[:POINTS.index(upto) + 1]):
         qin = (((s.get("points") or {}).get(point) or {}).get("odds")) or {}
         win = (((s.get("win_points") or {}).get(point) or {}).get("odds")) or {}
         shares = qin_shares(qin)
@@ -294,6 +294,21 @@ def add_qin_rise(s, point, rows):
     return {"qin_rise_all_steps": all_up, "qin_fall5_from_t5": fall5, "qin_rise_validation": QIN_RISE_VALIDATION}
 
 
+def add_t10_move(s, rows):
+    """t10 -> now: change of each horse's Quinella share and WIN price since ten minutes before the off (information only, never scored)."""
+    pts, wpts = s.get("points") or {}, s.get("win_points") or {}
+    shares10 = qin_shares(((pts.get("t10") or {}).get("odds")) or {})
+    win10 = ((wpts.get("t10") or {}).get("odds")) or {}
+    if len(shares10) < MIN_HORSES:
+        return
+    for row in rows:
+        h = row["horse"]
+        if h in shares10 and shares10[h] > 0 and row.get("qin_support_pct") is not None:
+            row["qin_move_pct_t10_to_now"] = round(100 * (row["qin_support_pct"] / (100 * shares10[h]) - 1), 1)
+        if win10.get(h):
+            row["win_move_pct_t10_to_now"] = round(100 * (win10[h] - row["win_odds"]) / win10[h], 1)
+
+
 # Flag list: every horse whose predicted close price is at least 5% shorter than its price now (predicted_drop_pct >= 5,
 # i.e. predicted_close_odds <= win_odds x 0.95). No top-N: a race can have 0 or 5 flagged horses.
 FLAG_MIN_DROP_PCT = 5.0
@@ -319,6 +334,15 @@ VALIDATION["t1"] = dict(T1_NOTE)
 FLAG_VALIDATION["qin"]["t1"] = dict(T1_NOTE)
 QIN_FLY_VALIDATION["t1"] = dict(T1_NOTE)
 
+# t10 = ten minutes before the off. Added 2026-11-28: no t10 history exists, so it runs the t5 fit unchanged (WIN price now + Quinella lead;
+# no WIN momentum, there is no earlier board) and every number it carries is labelled `unvalidated`. It has no share path and no rise fields.
+T10_NOTE = {"unvalidated": True, "coefs_from": "t5", "note": "t10 has no history of its own; t5 coefficients reused. Judge from the live scorecard."}
+COEFS["t10"] = dict(COEFS["t5"])
+PROB["qin"]["t10"] = dict(PROB["qin"]["t5"])
+VALIDATION["t10"] = dict(T10_NOTE)
+FLAG_VALIDATION["qin"]["t10"] = dict(T10_NOTE)
+QIN_FLY_VALIDATION["t10"] = dict(T10_NOTE)
+
 
 def flag_rows(rows):
     """Mark rows (already ranked) with `flagged`; returns the flagged horses, best first."""
@@ -330,7 +354,7 @@ def flag_rows(rows):
 def predict_windrop(s, point):
     """Prediction for one race state `s` at `point`; errors are labelled, never guessed."""
     pts, wpts = s.get("points") or {}, s.get("win_points") or {}
-    need_t5 = point != "t5"
+    need_t5 = point not in ("t5", "t10")
     w_now = ((wpts.get(point) or {}).get("odds")) or {}
     w_t5 = ((wpts.get("t5") or {}).get("odds")) or {}
     qin_now = ((pts.get(point) or {}).get("odds")) or {}
@@ -361,8 +385,12 @@ def predict_windrop(s, point):
     for rank, row in enumerate(rows, 1):
         row["rank"] = rank
     flagged = flag_rows(rows)
-    fly = {**qin_fly_fields(add_qin_fly(s, point, rows), point), **add_qin_rise(s, point, rows)}
-    fly["qin_fly_and_rising"] = add_fly_and_rising(rows)
+    if point == "t10":
+        fly = qin_fly_fields(add_qin_fly(s, point, rows), point)
+    else:
+        fly = {**qin_fly_fields(add_qin_fly(s, point, rows), point), **add_qin_rise(s, point, rows)}
+        fly["qin_fly_and_rising"] = add_fly_and_rising(rows)
+        add_t10_move(s, rows)
     return {"model": MODEL, "at_point": point, "made_at": (pts.get(point) or {}).get("observed_at"), **fly,
             "target_at": (pts.get(point) or {}).get("target_at"),
             "inputs": ["WIN", "QIN"], "top": [r["horse"] for r in rows[:TOP]], "horses": rows,

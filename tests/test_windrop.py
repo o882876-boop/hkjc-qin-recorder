@@ -247,7 +247,7 @@ class WindropInMainLoop(unittest.TestCase):
     def test_each_race_gets_t5_t3_t2_windrop_files_before_the_race_and_repeats_them_in_its_record(self):
         self.run_main(base.card(3), P1 - M(45), "600")
         names = [p.rsplit("/", 1)[1] for p in self.files("predictions/") if "-windrop-" in p and "-windrop-dbl-" not in p]
-        self.assertEqual(names, sorted(f"race-0{i}-windrop-{pt}-600-1.json" for i in (1, 2, 3) for pt in ("t1", "t2", "t3", "t5")))
+        self.assertEqual(names, sorted(f"race-0{i}-windrop-{pt}-600-1.json" for i in (1, 2, 3) for pt in ("t1", "t10", "t2", "t3", "t5")))
         for point, early, late in (("t5", 6, 4), ("t3", 4, 2), ("t2", 3, 1), ("t1", 2, 0)):
             for i in (1, 2, 3):
                 path = f"predictions/2026-11-11_HV/race-0{i}-windrop-{point}-600-1.json"
@@ -307,7 +307,7 @@ class WindropInMainLoop(unittest.TestCase):
             recorder.observe(meeting, pools, t)
             t += base.timedelta(seconds=8)
         due = recorder.make_windrops(t)
-        self.assertEqual(sorted(due), [(1, "t1"), (1, "t2"), (1, "t3"), (1, "t5")])
+        self.assertEqual(sorted(due), [(1, "t1"), (1, "t10"), (1, "t2"), (1, "t3"), (1, "t5")])
         for point in windrop.POINTS:
             recorder.state[1][f"windrop_{point}_published"] = True
         again = rec.Recorder.load(json.loads(json.dumps(recorder.dump())))
@@ -317,3 +317,43 @@ class WindropInMainLoop(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class T10Windrop(unittest.TestCase):
+    """t10 = ten minutes before the off: predicted with the t5 fit (unvalidated), plus the t10 -> now move on later predictions."""
+
+    def test_t10_uses_the_t5_fit_without_rise_fields_and_is_labelled_unvalidated(self):
+        s = {"points": {"t10": qin_board("5")}, "win_points": {"t10": {"odds": dict(WIN), "observed_at": "x"}}}
+        pred = windrop.predict_windrop(s, "t10")
+        self.assertEqual((pred["model"], pred["at_point"]), ("windrop_v1", "t10"))
+        self.assertTrue(pred["validation"]["unvalidated"])
+        self.assertEqual(pred["validation"]["coefs_from"], "t5")
+        self.assertTrue(pred["flag_validation"]["unvalidated"])
+        self.assertEqual(pred["horses"][0]["horse"], "5")
+        self.assertNotIn("qin_rise_all_steps", pred)
+        self.assertNotIn("qin_pct_path", pred["horses"][0])
+        self.assertIsNone(pred["horses"][0]["win_move_pct_t5_to_now"])
+        same_as_t5 = windrop.predict_windrop({"points": {"t5": qin_board("5")},
+                                              "win_points": {"t5": {"odds": dict(WIN), "observed_at": "x"}}}, "t5")
+        self.assertEqual([h["score"] for h in pred["horses"]], [h["score"] for h in same_as_t5["horses"]])
+        json.dumps(pred)
+
+    def test_t10_without_its_boards_is_an_error_not_a_guess(self):
+        self.assertIn("error", windrop.predict_windrop({"points": {}, "win_points": {}}, "t10"))
+
+    def test_t5_and_later_predictions_show_the_move_since_t10_and_stay_otherwise_unchanged(self):
+        base_state = state("5", point="t5")
+        without = windrop.predict_windrop(base_state, "t5")
+        win10 = {k: v * 1.1 for k, v in WIN.items()}
+        with_t10 = dict(base_state)
+        with_t10["points"] = {**base_state["points"], "t10": qin_board(None)}
+        with_t10["win_points"] = {**base_state["win_points"], "t10": {"odds": win10, "observed_at": "x"}}
+        pred = windrop.predict_windrop(with_t10, "t5")
+        row = next(h for h in pred["horses"] if h["horse"] == "5")
+        self.assertGreater(row["qin_move_pct_t10_to_now"], 0)          # horse 5's Quinella share rose against the neutral t10 board
+        self.assertAlmostEqual(row["win_move_pct_t10_to_now"], 100 * (win10["5"] - WIN["5"]) / win10["5"], places=1)
+        self.assertNotIn("qin_move_pct_t10_to_now", without["horses"][0])
+        for old, new in zip(without["horses"], pred["horses"]):        # scores, ranks, fly states are untouched
+            for key in ("horse", "score", "rank", "predicted_close_odds", "qin_fly_state"):
+                self.assertEqual(old.get(key), new.get(key))
+        self.assertEqual(without["flagged"], pred["flagged"])

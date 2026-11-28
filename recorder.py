@@ -466,10 +466,40 @@ def pools_by_race(meeting_id, pmpools):
     return result
 
 
+POOL_TYPES = ("WIN", "PLA", "QIN", "QPL", "DBL")
+QIN_POOL_TYPES = ("WIN", "PLA", "QIN", "QPL")     # single-race pools attached to every race board point
+
+
+def pool_investments(meeting):
+    """{race: {oddsType: {"investment": int, "updated_at": str}}} from the meeting's pool list (HKJC pool totals in HK$).
+
+    A Double is stored under its leg-1 race, the race its record is anchored to. Pools without a usable total are left out."""
+    out = {}
+    for pool in (meeting or {}).get("poolInvs") or []:
+        kind = pool.get("oddsType")
+        races = (pool.get("leg") or {}).get("races") or []
+        if kind not in POOL_TYPES or not races:
+            continue
+        try:
+            money = int(str(pool.get("investment")).strip())
+        except (ValueError, TypeError):
+            continue
+        if money < 0:
+            continue
+        out.setdefault(int(races[0]), {}).setdefault(kind, {"investment": money, "updated_at": pool.get("lastUpdateTime") or None})
+    return out
+
+
 class Recorder:
     def __init__(self, state=None):
         self.state = state or {}
         self.dbl_archived = set()           # leg-1 races whose Double record is already stored
+        self.pool_inv = {}                  # latest pool totals from the meeting list, {race: {type: {...}}}
+
+    def pool_tag(self, n, kinds):
+        """{"pools": {...}} for race n (only the requested pool types that HKJC reported), or {} when none."""
+        got = {k: v for k, v in (self.pool_inv.get(n) or {}).items() if k in kinds}
+        return {"pools": got} if got else {}
 
     # ---- persistence for hand-over between runs ----
     def dump(self):
@@ -501,6 +531,7 @@ class Recorder:
     def observe(self, meeting, pmpools, captured):
         """Update race state from one poll. Returns human-readable transition messages."""
         events = []
+        self.pool_inv = pool_investments(meeting)
         pools = pools_by_race(meeting["id"], pmpools)
         races = sorted(meeting["races"], key=lambda race: int(race["no"]))
         for race in races:
@@ -608,6 +639,7 @@ class Recorder:
                     continue
                 if current and pool_open(qin):
                     s["points"][name] = {**current, "target_at": target.isoformat(), "basis": "open_board",
+                                         **self.pool_tag(n, QIN_POOL_TYPES),
                                          **({"anchor": anchors[name]} if name in anchors else {})}
                     events.append(f"R{n} {name} captured (target {target:%H:%M:%S}, source odds {current['source_odds_at']})")
             start = s.get("start")
@@ -615,11 +647,13 @@ class Recorder:
                 closed = s.get("closed_board")
                 if closed and s.get("close") and s["close"] <= stamp(closed["observed_at"]) <= start + WINDOW:
                     s["points"]["after_start"] = {**closed, "target_at": start.isoformat(),
-                                                  "basis": "closed_board_after_stop_sell", "anchor": s["start_anchor"]}
+                                                  "basis": "closed_board_after_stop_sell", "anchor": s["start_anchor"],
+                                                  **self.pool_tag(n, QIN_POOL_TYPES)}
                     events.append(f"R{n} after_start captured (source odds {closed['source_odds_at']})")
                 elif start <= captured <= start + WINDOW and current and not pool_open(qin):
                     s["points"]["after_start"] = {**current, "target_at": start.isoformat(),
-                                                  "basis": "closed_board_after_off", "anchor": s["start_anchor"]}
+                                                  "basis": "closed_board_after_off", "anchor": s["start_anchor"],
+                                                  **self.pool_tag(n, QIN_POOL_TYPES)}
                     events.append(f"R{n} after_start captured (source odds {current['source_odds_at']})")
                 elif captured > start + WINDOW:
                     cutoff = s.get("close") or start
@@ -757,6 +791,7 @@ class Recorder:
     def observe_dbl(self, meeting, pmpools, captured):
         """Capture Double boards for leg-1 race N at T-5/T-3/T-2 and at its off. Returns log messages."""
         events = []
+        self.pool_inv = pool_investments(meeting)
         pools = dbl_pools_by_race(meeting["id"], pmpools)
         races = {int(r["no"]): r for r in meeting["races"]}
         for n, race in sorted(races.items()):
@@ -803,18 +838,21 @@ class Recorder:
                 if name in d["points"] or not target <= captured <= target + WINDOW:
                     continue
                 if current and is_open:
-                    d["points"][name] = {**current, "target_at": target.isoformat(), "basis": "open_board"}
+                    d["points"][name] = {**current, "target_at": target.isoformat(), "basis": "open_board",
+                                         **self.pool_tag(n, ("DBL",))}
                     events.append(f"R{n} DBL {name} captured (source odds {current['source_odds_at']})")
             start = s.get("start")
             if start and "after_start" not in d["points"]:
                 closed = d.get("closed_board")
                 if closed and stamp(closed["observed_at"]) <= start + WINDOW:
                     d["points"]["after_start"] = {**closed, "target_at": start.isoformat(),
-                                                  "basis": "closed_board_after_stop_sell", "anchor": s.get("start_anchor")}
+                                                  "basis": "closed_board_after_stop_sell", "anchor": s.get("start_anchor"),
+                                                  **self.pool_tag(n, ("DBL",))}
                     events.append(f"R{n} DBL after_start captured")
                 elif start <= captured <= start + WINDOW and current and not is_open:
                     d["points"]["after_start"] = {**current, "target_at": start.isoformat(),
-                                                  "basis": "closed_board_after_off", "anchor": s.get("start_anchor")}
+                                                  "basis": "closed_board_after_off", "anchor": s.get("start_anchor"),
+                                                  **self.pool_tag(n, ("DBL",))}
                     events.append(f"R{n} DBL after_start captured")
                 elif captured > start + WINDOW:
                     cutoff = s.get("close") or start

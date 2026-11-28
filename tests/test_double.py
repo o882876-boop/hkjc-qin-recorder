@@ -64,6 +64,17 @@ class DoubleRecording(unittest.TestCase):
                                    "t10_to_t5", "t10_to_after_start"})
         json.dumps(record)
 
+    def test_every_double_point_carries_the_double_pool_total(self):
+        recorder = simulate_dbl(base.card(3), P1 - M(45), P1 + M(65))
+        record = recorder.dbl_record(1, DAY, "HV", MID)
+        totals = []
+        for name in ("t10", "t5", "t3", "t2", "t1", "after_start"):
+            pools = record["points"][name]["pools"]
+            self.assertEqual(set(pools), {"DBL"}, name)
+            totals.append(pools["DBL"]["investment"])
+        self.assertEqual(totals, sorted(totals))
+        self.assertEqual(len(set(totals)), len(totals))
+
     def test_second_pair_is_anchored_to_its_own_leg1_off(self):
         recorder = simulate_dbl(base.card(3), P1 - M(45), P1 + M(65))
         record = recorder.dbl_record(2, DAY, "HV", MID)

@@ -33,12 +33,20 @@ next live race with the clock shifted to just before its T-5, saves the record
 to `qin-diagnostics/rehearsal-RUN.json`, reads it back, and logs how many
 seconds after each target the T-5, T-3 and T-2 boards were taken.
 
+## Pool totals (`pools`, added 2026-11-28)
+
+Every Quinella board point (`t10` ... `after_start`) carries `pools`: HKJC's pool totals in HK$ for that race's WIN, PLA, QIN and QPL pools
+(`{"WIN": {"investment": 480385, "updated_at": "..."}, ...}`), read from the meeting's pool list at the moment of the capture. Every Double
+board point carries `pools.DBL` the same way. A pool HKJC does not report is left out; older archives have no `pools`. Recorded only: no
+prediction uses pool totals, and whether they help is untested until a few race days of totals exist.
+
 ## Snapshots (race N)
 
 | point | when |
 |---|---|
 | `before_rollover` | first poll after race N-1 stops selling (the off) |
 | `after_rollover` | 2 min after race N-1 WIN payout (`anchor` says if a fallback was used: result + 10 min, or off + 14 min) |
+| `t10` | 10 min before race N's post time (added 2026-11-28). Recorded for the Quinella, WIN and Double boards; the Quinella windrop also predicts at `t10`, unvalidated (t5 fit reused, see docs/WINDROP.md). Older archives have no `t10` |
 | `t5`, `t3`, `t2`, `t1` | 5 / 3 / 2 / 1 min before race N's post time; re-taken if HKJC moves the post time. `t1` is recorded; only the Quinella windrop also predicts at `t1`, unvalidated (t2 fit reused, see docs/WINDROP.md), nothing else does and older archives have no `t1` |
 | `after_start` | first closed board at race N's off. If HKJC withdraws the board, `basis` starts with `FALLBACK_` and the last open board (at most 60 s old) is used |
 
