@@ -23,9 +23,6 @@ from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import windrop  # noqa: E402  (pure functions, no I/O)
-import windrop_summary  # noqa: E402
-import momentum_summary  # noqa: E402
 
 HK = ZoneInfo("Asia/Hong_Kong")
 ENDPOINT = "https://info.cld.hkjc.com/graphql/base-get/"
@@ -339,98 +336,12 @@ def extras(rows, key, final_args, ring, close):
     return final, points, missing
 
 
-# ---- t2 prediction: which horses keep shortening between t2 and the close ----
-PREDICT_MODEL = "momentum_v1"
-PREDICT_TOP = 3
-PREDICT_WIN_WAIT = timedelta(seconds=60)    # use Quinella alone if the WIN t2 board has not arrived this long after
-
-
-def qin_horse_drops(early, late):
-    """{horse: mean % drop of its Quinella combinations between two boards}; needs 5+ comparable combinations."""
-    per = {}
-    for pair, a in (early or {}).get("odds", {}).items():
-        b = ((late or {}).get("odds") or {}).get(pair)
-        if a and b:
-            for horse in pair.split("-"):
-                per.setdefault(horse, []).append(100 * (a - b) / a)
-    return {h: sum(v) / len(v) for h, v in per.items() if len(v) >= 5}
-
-
 def win_horse_drops(early, late):
     out = {}
     for horse, a in (early or {}).get("odds", {}).items():
         b = ((late or {}).get("odds") or {}).get(horse)
         if a and b:
             out[horse] = 100 * (a - b) / a
-    return out
-
-
-def zscores(values, keys):
-    xs = [values[k] for k in keys]
-    mean = sum(xs) / len(xs)
-    sd = (sum((x - mean) ** 2 for x in xs) / len(xs)) ** 0.5 or 1.0
-    return {k: (values[k] - mean) / sd for k in keys}
-
-
-DBL_FIRST_WAIT = timedelta(minutes=10)         # windrop_dbl `first`: wait this long for race N-1's closed WIN board and Double
-PREDICT_POINTS = {"t3": ("t5",), "t2": ("t5", "t3")}      # prediction point -> earlier boards usable as the reference
-
-
-def predict_at(s, point, use_win=True):
-    """Rank horses by how strongly their price was already shortening up to `point` (t3 or t2).
-
-    Momentum: mean Quinella-combination drop and WIN drop from an earlier board to `point`, z-scored and added.
-    Back-tests (Sha Tin 2026-11-14 and Happy Valley 2026-11-11): the horses that had shortened most tended to keep
-    shortening until the close. t5->t3 over 15 races: rank correlation +0.30, 14 of 15 races positive, 17 of 45 top-3
-    picks against about 10.7 by chance; t2 over 7 races: +0.4, 11 of 21 against about 4.6. Exploratory, two meetings.
-    """
-    pts, wpts = s.get("points") or {}, s.get("win_points") or {}
-    ref = next((r for r in PREDICT_POINTS[point] if pts.get(r)), None)
-    if not ref or not pts.get(point):
-        return {"model": PREDICT_MODEL, "at_point": point, "error": f"need_{point}_and_an_earlier_board"}
-    q = qin_horse_drops(pts[ref], pts[point])
-    w = win_horse_drops(wpts.get(ref), wpts.get(point)) if use_win else {}
-    horses = sorted((h for h in q if (h in w or not w)), key=int)
-    if len(horses) < 4:
-        return {"model": PREDICT_MODEL, "at_point": point, "error": "too_few_comparable_horses"}
-    zq = zscores(q, horses)
-    zw = zscores(w, horses) if w else {h: 0.0 for h in horses}
-    score = {h: zq[h] + zw[h] for h in horses}
-    order = sorted(horses, key=lambda h: -score[h])
-    win_odds = (wpts.get(point) or {}).get("odds", {})
-    return {"model": PREDICT_MODEL, "at_point": point, "reference_point": ref,
-            "inputs": ["QIN", "WIN"] if w else ["QIN"],
-            "made_at": pts[point]["observed_at"], "target_at": pts[point].get("target_at"),
-            "note": f"{point} follows the published post time; if the race runs late this predicts the move over a longer period",
-            "top": order[:PREDICT_TOP],
-            "horses": [{"horse": h, "score": round(score[h], 3), f"qin_drop_pct_ref_to_{point}": round(q[h], 2),
-                        f"win_drop_pct_ref_to_{point}": round(w[h], 2) if h in w else None,
-                        f"win_odds_{point}": win_odds.get(h)} for h in order]}
-
-
-def predict_t2(s, use_win=True):
-    return predict_at(s, "t2", use_win)
-
-
-def predict_outcome(pred, pts, wpts):
-    """Compare a stored prediction with what the horses really did from its point to after_start."""
-    if not pred or not pred.get("horses"):
-        return None
-    point = pred.get("at_point", "t2")
-    if not (pts or {}).get("after_start"):
-        return {"missing": "no_after_start"}
-    horses = [h["horse"] for h in pred["horses"]]
-    q = qin_horse_drops(pts[point], pts["after_start"])
-    w = win_horse_drops((wpts or {}).get(point), (wpts or {}).get("after_start"))
-    out = {f"qin_drop_pct_{point}_to_after_start": {h: round(q[h], 2) for h in horses if h in q},
-           f"win_drop_pct_{point}_to_after_start": {h: round(w[h], 2) for h in horses if h in w}}
-    for name, actual in (("qin", q), ("win", w)):
-        common = [h for h in horses if h in actual]
-        if len(common) >= PREDICT_TOP:
-            real = sorted(common, key=lambda h: -actual[h])[:PREDICT_TOP]
-            out[f"{name}_actual_top"] = real
-            out[f"{name}_top_hits"] = len(set(pred["top"]) & set(real))
-            out[f"{name}_chance_hits"] = round(PREDICT_TOP * PREDICT_TOP / len(common), 2)
     return out
 
 
@@ -841,93 +752,6 @@ class Recorder:
             if not d.get("published"):
                 d["done"] = True
 
-    def make_predictions(self, at):
-        """Build the t3 and t2 predictions for every race whose boards are in. Returns (race, point) not yet published."""
-        due = []
-        for n, s in self.state.items():
-            for point in PREDICT_POINTS:
-                if s.get(f"{point}_prediction_published"):
-                    continue
-                board = (s.get("points") or {}).get(point)
-                if not board:
-                    continue
-                if f"{point}_prediction" not in s:
-                    waited = at - stamp(board["observed_at"])
-                    have_win = bool((s.get("win_points") or {}).get(point))
-                    if not have_win and waited < PREDICT_WIN_WAIT:
-                        continue
-                    try:
-                        s[f"{point}_prediction"] = predict_at(s, point, use_win=have_win)
-                    except Exception as error:  # noqa: BLE001 - a prediction bug must never stop the recorder
-                        s[f"{point}_prediction"] = {"model": PREDICT_MODEL, "at_point": point, "error": type(error).__name__}
-                        log(f"R{n} {point} prediction skipped ({type(error).__name__})")
-                due.append((n, point))
-        return due
-
-    def make_windrops(self, at):
-        """Build the windrop_v1 prediction at t5, t3 and t2 for every race whose boards are in. Returns (race, point) not yet published."""
-        due = []
-        for n, s in self.state.items():
-            for point in windrop.POINTS:
-                key = f"windrop_{point}"
-                if s.get(f"{key}_published"):
-                    continue
-                board = (s.get("points") or {}).get(point)
-                if not board:
-                    continue
-                if key not in s:
-                    waited = at - stamp(board["observed_at"])
-                    if not (s.get("win_points") or {}).get(point) and waited < PREDICT_WIN_WAIT:
-                        continue
-                    try:
-                        s[key] = windrop.predict_windrop(s, point)
-                    except Exception as error:  # noqa: BLE001 - a prediction bug must never stop the recorder
-                        s[key] = {"model": windrop.MODEL, "at_point": point, "error": type(error).__name__}
-                        log(f"R{n} {point} windrop skipped ({type(error).__name__})")
-                    if point == "t2" and "windrop_longshot_t2" not in s:
-                        try:
-                            s["windrop_longshot_t2"] = windrop.predict_longshot(s)
-                        except Exception as error:  # noqa: BLE001
-                            s["windrop_longshot_t2"] = {"model": windrop.LONGSHOT_MODEL, "at_point": "t2", "error": type(error).__name__}
-                due.append((n, point))
-        return due
-
-    def make_windrops_dbl(self, at):
-        """windrop_dbl_v1 for races 2+: `first` (first WIN board after the previous race stopped selling), t5 and t2.
-
-        Needs race N-1's closed WIN board and its frozen Double; waits for them, then writes a labelled error rather than guess.
-        Returns (race, point) not yet published."""
-        due = []
-        for n, s in self.state.items():
-            prev = self.state.get(n - 1)
-            if prev is None or prev.get("void") or s.get("void"):
-                continue
-            for point in windrop.DBL_POINTS:
-                key = f"windrop_dbl_{point}"
-                if s.get(f"{key}_published"):
-                    continue
-                board_name = windrop.DBL_BOARD[point]
-                board = (s.get("points") or {}).get(board_name) or (s.get("win_points") or {}).get(board_name)
-                if not board:
-                    continue
-                if key not in s:
-                    ready = bool((s.get("win_points") or {}).get(board_name)) and bool(windrop.dbl_frozen(prev)) and bool(
-                        ((prev.get("win_points") or {}).get("after_start")))
-                    if point != "first":
-                        ready = ready and bool((s.get("points") or {}).get(board_name))
-                    if not ready and at - stamp(board["observed_at"]) < (DBL_FIRST_WAIT if point == "first" else PREDICT_WIN_WAIT):
-                        continue
-                    for name, combined in ((key, False), (f"windrop_combo_{point}", True)):
-                        if combined and point not in windrop.DBL_COMBINED_POINTS:
-                            continue
-                        try:
-                            s[name] = windrop.predict_dbl(s, prev, point, combined=combined)
-                        except Exception as error:  # noqa: BLE001 - a prediction bug must never stop the recorder
-                            s[name] = {"model": windrop.DBL_MODEL + ("_combined" if combined else ""), "at_point": point,
-                                       "error": type(error).__name__}
-                            log(f"R{n} {point} windrop_dbl{' combined' if combined else ''} skipped ({type(error).__name__})")
-                due.append((n, point))
-        return due
 
     def dbl_wanted(self, at):
         """True when a Double query is worthwhile: a leg-1 race is near its off and its Double is unfinished.
@@ -1021,34 +845,6 @@ class Recorder:
         win_final, wcpoints, wcmissing = extras(win_rows, "runner",
                                                 (wlast, wlast and wlast.get("observed_at"), cutoff),
                                                 (s.get("ring") or {}).get("win"), close)
-        outcomes = {}
-        for point in PREDICT_POINTS:
-            try:
-                outcomes[point] = predict_outcome(s.get(f"{point}_prediction"), points, win_points)
-            except Exception as error:  # noqa: BLE001
-                outcomes[point] = {"error": type(error).__name__}
-        windrop_outcomes = {}
-        for point in windrop.POINTS:
-            try:
-                windrop_outcomes[point] = windrop.windrop_outcome(s.get(f"windrop_{point}"), win_points)
-            except Exception as error:  # noqa: BLE001
-                windrop_outcomes[point] = {"error": type(error).__name__}
-        try:
-            windrop_longshot_outcome = windrop.longshot_outcome(s.get("windrop_longshot_t2"), win_points)
-        except Exception as error:  # noqa: BLE001
-            windrop_longshot_outcome = {"error": type(error).__name__}
-        windrop_dbl_outcomes = {}
-        for point in windrop.DBL_POINTS:
-            try:
-                windrop_dbl_outcomes[point] = windrop.windrop_outcome(s.get(f"windrop_dbl_{point}"), win_points)
-            except Exception as error:  # noqa: BLE001
-                windrop_dbl_outcomes[point] = {"error": type(error).__name__}
-        windrop_combo_outcomes = {}
-        for point in windrop.DBL_COMBINED_POINTS:
-            try:
-                windrop_combo_outcomes[point] = windrop.windrop_outcome(s.get(f"windrop_combo_{point}"), win_points)
-            except Exception as error:  # noqa: BLE001
-                windrop_combo_outcomes[point] = {"error": type(error).__name__}
         iso = lambda t: t.isoformat() if isinstance(t, datetime) else None
         return {"schema": 2, "date": day, "venue": venue, "meeting_id": meeting_id, "race": n,
                 "post_time": iso(s.get("post")), "rollover_from_race": rollover_from,
@@ -1059,15 +855,6 @@ class Recorder:
                 "points": points, "missing": missing, "final_open": final, "win_final_open": win_final,
                 "close_points": cpoints, "close_missing": cmissing,
                 "win_close_points": wcpoints, "win_close_missing": wcmissing,
-                "t2_prediction": s.get("t2_prediction"), "t2_prediction_outcome": outcomes["t2"],
-                "t3_prediction": s.get("t3_prediction"), "t3_prediction_outcome": outcomes["t3"],
-                "windrop": {p: s.get(f"windrop_{p}") for p in windrop.POINTS},
-                "windrop_outcome": windrop_outcomes,
-                "windrop_longshot": s.get("windrop_longshot_t2"), "windrop_longshot_outcome": windrop_longshot_outcome,
-                "windrop_dbl": {p: s.get(f"windrop_dbl_{p}") for p in windrop.DBL_POINTS},
-                "windrop_dbl_outcome": windrop_dbl_outcomes,
-                "windrop_combined": {p: s.get(f"windrop_combo_{p}") for p in windrop.DBL_COMBINED_POINTS},
-                "windrop_combined_outcome": windrop_combo_outcomes,
                 "win_points": win_points, "win_missing": win_missing, "win_superseded": s.get("win_superseded", []),
                 "superseded": s.get("superseded", []),
                 "suspensions": s.get("suspensions", []), "combinations": rows, "win_runners": win_rows}
@@ -1155,109 +942,6 @@ class Archive:
 
 def race_folder(day, venue):
     return f"qin-history/{day}_{venue}"
-
-
-def prediction_folder(day, venue):
-    return f"predictions/{day}_{venue}"
-
-
-def publish_predictions(recorder, archive, day, venue, meeting_id):
-    """Write each prediction the moment it exists (its own small file), so it can be read before the race."""
-    for n, point in recorder.make_predictions(now()):
-        s = recorder.state[n]
-        pred = s[f"{point}_prediction"]
-        try:
-            body = {"schema": 1, "date": day, "venue": venue, "meeting_id": meeting_id, "race": n, "point": point,
-                    "post_time": s["post"].isoformat() if s.get("post") else None,
-                    "prediction": pred, "written_at": now().isoformat()}
-            if archive.put(f"{prediction_folder(day, venue)}/race-{n:02}-{point}-{archive.run}.json", body,
-                           f"Prediction R{n} at {point}"):
-                s[f"{point}_prediction_published"] = True
-                log(f"R{n} {point} prediction written: {pred.get('top') or pred.get('error')}")
-        except SystemExit:
-            raise
-        except Exception as error:  # noqa: BLE001
-            log(f"R{n} {point} prediction could not be written ({type(error).__name__}); will retry")
-
-
-def publish_windrops(recorder, archive, day, venue, meeting_id):
-    """Write each windrop_v1 prediction the moment it exists (its own file next to the other predictions)."""
-    for n, point in recorder.make_windrops(now()):
-        s = recorder.state[n]
-        pred = s[f"windrop_{point}"]
-        try:
-            body = {"schema": 1, "date": day, "venue": venue, "meeting_id": meeting_id, "race": n, "point": point,
-                    "kind": "windrop", "post_time": s["post"].isoformat() if s.get("post") else None,
-                    "prediction": pred, "longshot": s.get("windrop_longshot_t2") if point == "t2" else None,
-                    "written_at": now().isoformat()}
-            if archive.put(f"{prediction_folder(day, venue)}/race-{n:02}-windrop-{point}-{archive.run}.json", body,
-                           f"Windrop prediction R{n} at {point}"):
-                s[f"windrop_{point}_published"] = True
-                log(f"R{n} {point} windrop written: {pred.get('top') or pred.get('error')}")
-        except SystemExit:
-            raise
-        except Exception as error:  # noqa: BLE001
-            log(f"R{n} {point} windrop could not be written ({type(error).__name__}); will retry")
-
-
-def publish_windrops_dbl(recorder, archive, day, venue, meeting_id):
-    """Write each windrop_dbl_v1 prediction the moment it exists; an error here never affects the other records."""
-    for n, point in recorder.make_windrops_dbl(now()):
-        s = recorder.state[n]
-        pred = s[f"windrop_dbl_{point}"]
-        try:
-            body = {"schema": 1, "date": day, "venue": venue, "meeting_id": meeting_id, "race": n, "point": point,
-                    "kind": "windrop_dbl", "post_time": s["post"].isoformat() if s.get("post") else None,
-                    "prediction": pred, "combined": s.get(f"windrop_combo_{point}"), "written_at": now().isoformat()}
-            if archive.put(f"{prediction_folder(day, venue)}/race-{n:02}-windrop-dbl-{point}-{archive.run}.json", body,
-                           f"Windrop DBL prediction R{n} at {point}"):
-                s[f"windrop_dbl_{point}_published"] = True
-                log(f"R{n} {point} windrop_dbl written: {pred.get('top') or pred.get('error')}")
-        except SystemExit:
-            raise
-        except Exception as error:  # noqa: BLE001
-            log(f"R{n} {point} windrop_dbl could not be written ({type(error).__name__}); will retry")
-
-
-SUMMARY_MIN_GAP = timedelta(seconds=45)
-
-
-def publish_summary(recorder, archive, day, venue, force=False):
-    """Keep `predictions/<date>_<venue>/summary.md` current: rewritten when its content changed, at most every 45 seconds. Never raises."""
-    try:
-        text = windrop_summary.build_summary(day, venue, recorder.state)
-        if not text or text == getattr(recorder, "summary_text", None):
-            return
-        last = getattr(recorder, "summary_at", None)
-        if not force and last and now() - last < SUMMARY_MIN_GAP:
-            return
-        stamped = text + f"\n_更新：{now().astimezone(HK):%Y-%m-%d %H:%M:%S} HKT_\n"
-        if archive.put_text(f"{prediction_folder(day, venue)}/summary.md", stamped, f"windrop summary {day} {venue}"):
-            recorder.summary_text, recorder.summary_at = text, now()
-            log("windrop summary updated")
-    except SystemExit:
-        raise
-    except Exception as error:  # noqa: BLE001 - the summary must never stop the recorder
-        log(f"windrop summary skipped ({type(error).__name__})")
-
-
-def publish_momentum(recorder, archive, day, venue, force=False):
-    """Keep `predictions/<date>_<venue>/momentum.md` current (t3/t2 momentum predictions + after-the-race check). Never raises."""
-    try:
-        text = momentum_summary.build_momentum(day, venue, recorder.state, predict_outcome)
-        if not text or text == getattr(recorder, "momentum_text", None):
-            return
-        last = getattr(recorder, "momentum_at", None)
-        if not force and last and now() - last < SUMMARY_MIN_GAP:
-            return
-        stamped = text + f"\n_更新：{now().astimezone(HK):%Y-%m-%d %H:%M:%S} HKT_\n"
-        if archive.put_text(f"{prediction_folder(day, venue)}/momentum.md", stamped, f"momentum summary {day} {venue}"):
-            recorder.momentum_text, recorder.momentum_at = text, now()
-            log("momentum summary updated")
-    except SystemExit:
-        raise
-    except Exception as error:  # noqa: BLE001 - the page must never stop the recorder
-        log(f"momentum summary skipped ({type(error).__name__})")
 
 
 def dbl_folder(day, venue):
@@ -1488,11 +1172,6 @@ def main():
             if now() - started > HARD_HANDOFF:
                 break
             continue
-        publish_predictions(recorder, archive, day, venue, meeting_id)
-        publish_windrops(recorder, archive, day, venue, meeting_id)
-        publish_windrops_dbl(recorder, archive, day, venue, meeting_id)
-        publish_summary(recorder, archive, day, venue)
-        publish_momentum(recorder, archive, day, venue)
         if recorder.dbl_wanted(captured):
             try:                              # isolated: a Double failure must never disturb the Quinella loop
                 dbl = odds_pools(day, venue, ("DBL",))
@@ -1523,8 +1202,6 @@ def main():
                     log(f"Race {n} archived: {len(got)}/{len(POINTS)} points {got}; missing {record['missing'] or 'none'}; WIN missing {record['win_missing'] or 'none'}")
         if all("published" in recorder.state.get(int(r["no"]), {}) for r in meeting["races"]):
             settle_doubles(recorder, archive, day, venue, meeting_id)
-            publish_summary(recorder, archive, day, venue, force=True)
-            publish_momentum(recorder, archive, day, venue, force=True)
             log("All races archived.")
             return
         elapsed = now() - started
@@ -1541,8 +1218,6 @@ def main():
                         s["published"] = archive.run
                         log(f"Race {n} archived incomplete; missing {record['missing']}")
             settle_doubles(recorder, archive, day, venue, meeting_id)
-            publish_summary(recorder, archive, day, venue, force=True)
-            publish_momentum(recorder, archive, day, venue, force=True)
             raise SystemExit("Meeting window ended before every race completed.")
         pause(recorder, time.monotonic() - tick)
     state = {"saved_at": now().isoformat(), "meeting_id": meeting_id, "state": recorder.dump()}

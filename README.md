@@ -39,7 +39,7 @@ seconds after each target the T-5, T-3 and T-2 boards were taken.
 |---|---|
 | `before_rollover` | first poll after race N-1 stops selling (the off) |
 | `after_rollover` | 2 min after race N-1 WIN payout (`anchor` says if a fallback was used: result + 10 min, or off + 14 min) |
-| `t5`, `t3`, `t2`, `t1` | 5 / 3 / 2 / 1 min before race N's post time; re-taken if HKJC moves the post time. `t1` is recorded; only the Quinella windrop also predicts at `t1`, unvalidated (t2 fit reused, see docs/WINDROP.md), nothing else does and older archives have no `t1` |
+| `t5`, `t3`, `t2`, `t1` | 5 / 3 / 2 / 1 min before race N's post time; re-taken if HKJC moves the post time. `t1` is recorded; older archives have no `t1` |
 | `after_start` | first closed board at race N's off. If HKJC withdraws the board, `basis` starts with `FALLBACK_` and the last open board (at most 60 s old) is used |
 
 The per-combination `drop_pct` includes T-3 to T-2 and T-2 to the final board,
@@ -117,31 +117,6 @@ reason in `close_missing` when one cannot be found. Each combination row gets `c
 The close is the observed stop-sell (accurate to about 8 s). The rolling window is not carried over a hand-over, so a race
 whose run was taken over mid-race has `close_missing` instead of guessed values. Existing fields are unchanged.
 
-## t3 and t2 predictions (`predictions/`)
-
-Two predictions are made for every race, each the moment its boards are in (Quinella and WIN, within a few seconds):
-
-| point | looks at | predicts |
-|---|---|---|
-| `t3` | how much each horse's price shortened from `t5` to `t3` | which horses keep shortening from `t3` to the close |
-| `t2` | `t5` (or `t3`) to `t2` | which horses keep shortening from `t2` to the close |
-
-`momentum_v1`: for each horse the mean Quinella-combination drop and the WIN drop over the "before" window, each z-scored and
-added (Quinella alone if the WIN board is more than 60 s late). Each prediction is written straight away in its own small file,
-so it can be read before the race:
-`odds-data:predictions/YYYY-MM-DD_VENUE/race-NN-t3-RUN.json` and `race-NN-t2-RUN.json`, with `prediction.top` (3 horses expected
-to keep shortening) and `prediction.horses` (every horse: score, drops, WIN price at that point).
-
-Both are repeated in the race's `qin-history` record as `t3_prediction` / `t2_prediction`, each with `*_outcome` (what every horse
-really did from that point to `after_start`, the three that actually shortened most, and `qin_top_hits` against
-`qin_chance_hits`, the hits expected by chance). Add these up over many race days before trusting either.
-
-It predicts *which prices keep shortening*, not which horse wins. Back-test on the two meetings recorded so far (the model was chosen
-after looking at them, so the figures are optimistic): `t3` 15 races, 20 of 45 top-3 picks against about 10.7 by chance, rank
-correlation +0.30 with 14 of 15 races positive; `t2` 7 races, 11 of 21 against about 4.6. `t3`/`t2` follow the published post time, so
-for a race that runs late the prediction covers a longer period. A prediction bug can only blank the prediction
-(`prediction.error`), never the record.
-
 ## 66888 water indices during the meeting (`record-indices.yml`)
 
 `indices_recorder.py` reads the public 66888 W/P water-index page of every race at 10, 5 and 2 minutes
@@ -157,73 +132,7 @@ from the same external scheduler that triggers `record.yml`: `POST /repos/<owner
 with `{"ref":"main"}`. A backup schedule exists but GitHub fires it unreliably. Checks: `probe` reads race 1
 once and reports the status; `write_test` verifies the private archive write.
 
-> The whole windrop family (Quinella, Double, combined, longshot, flag list) is described in [docs/WINDROP.md](docs/WINDROP.md); reproduce with `research/windrop/backtest.py`, score live with `research/windrop/report.py`.
 
-## windrop_v1: predicted WIN shortening and close price (t5, t3, t2)
+## Scope
 
-At t5, t3 and t2 of every race the recorder also writes `predictions/<date>_<venue>/race-NN-windrop-<point>-<run>.json`
-(written the moment the board is in, before the race) and repeats it in the race record (`windrop`, `windrop_outcome`
-after the off). Per horse: WIN odds now, WIN-implied %, Quinella support %, `lead_pct` (Quinella support / WIN-implied - 1),
-`score`, `rank`, `predicted_drop_pct` (+ = WIN expected to shorten until the close) and `predicted_close_odds`.
-`top` is the three highest scores. See `windrop.py` for the exact formula and coefficients.
-
-Fitted on 16 races (Sha Tin 2026-11-14, Happy Valley 2026-11-18, 204 runners); two meetings, so treat it as exploratory.
-Leave-one-race-out: about 54% of the top three shortened by 10% or more (about 21% of all runners do); the typical error
-of the predicted close price is about 20-25% (mean |ln error| 0.225 at t2 against 0.264 for favourite-ness alone and 0.346
-for "close = now"). A ranking signal, not a betting recommendation. Refit the coefficients as more race days are stored;
-`windrop_outcome` in each race record is the out-of-sample check.
-
-## windrop_dbl_v1: Double (孖寶) prediction, and the chance of shortening (races 2+)
-
-Three separate predictions, each with the chance that the WIN price ends **10% or more shorter** (`shorten_prob_10pct`) or
-shorter at all (`shorten_prob_any`), and a predicted close price with a 50% band (`predicted_close_odds`,
-`predicted_close_low` .. `predicted_close_high`):
-
-- **Quinella** - `windrop_v1`, at t5, t3, t2 (above).
-- **Double** - `windrop_dbl_v1`, at `first`, t5, t2: score = edge only.
-- **Combined** - `windrop_dbl_v1_combined`, at t5, t2: edge plus the Quinella lead (the best calibrated of the three).
-
-The Double of legs (N-1, N) is frozen when race N-1 stops selling. Its price for (a, b) should be about W1(a) x W2(b), where
-W1 is race N-1's WIN price after the close. Dividing by W1 gives the race-N price the Double bettors had in mind
-(`dbl_implied_win_odds`, weighted over leg-1 horses at 10x or less). `edge_pct` is how much longer the WIN price is than that;
-long = expected to shorten. `first` is race N's first WIN board after race N-1 stopped selling (about 30 minutes before race N).
-
-Written per race 2+ as `predictions/<date>_<venue>/race-NN-windrop-dbl-<first|t5|t2>-<run>.json` (`prediction` = Double,
-`combined` = Double + Quinella, null at `first`) and repeated in the race record (`windrop_dbl`, `windrop_combined` and their
-`*_outcome`, which score each chance with a Brier value and count the horses inside the 50% band).
-
-Fitted on 12 races (Sha Tin 2026-11-14, Happy Valley 2026-11-18), 16 for the Quinella model; checked leave-one-race-out. The
-chances are calibrated: horses given 60%+ shortened 10%+ about 7 times in 10, horses given under 15% about 1 time in 25, and the
-50% band holds the close price about half the time. Brier score of the 10% chance (lower is better, base rate alone in brackets):
-Double 0.107-0.126 (0.17-0.19), combined 0.102-0.109 (0.17-0.18), Quinella 0.112-0.131 (0.16-0.18). Exploratory, two
-meetings: a ranking and a chance, not a betting recommendation; refit as more race days are stored.
-
-
-### Flag list and longshot flag
-
-Every prediction also carries `flagged`: the horses whose predicted close price is at least 5% below the price now (no top-N, a race
-can have 0 or 5), with `flag_validation`. At t2 the Quinella file also carries `longshot` (`windrop_longshot_v1`): horses at 20x or
-more that are in the race top 3 by Quinella-combination drop t5 -> t2 (13 flagged -> 4 shortened 10%+, 61 not flagged -> 0; low
-confidence, 4 fallers). Race records add `windrop_longshot` and the `*_outcome` scoring. See docs/WINDROP.md.
-
-### Quinella 飛 states
-
-Every Quinella, Double and combined prediction row says whether the horse's Quinella-pool share is above its WIN-implied share (`qin_fly_state`:
-`fly`, `tie` within 1 percentage point below, `no_fly` below that; `qin_fly_points` for t5/t3/t2). `qin_no_fly` is the exclusion list (tie is never
-excluded). 16 races: no_fly horses shortened 10%+ only about 9-10% of the time (all runners 21%) and 39 of 42 fallers were kept. An exclusion
-filter, not a pick. See docs/WINDROP.md.
-
-### Quinella share path from the previous payout
-
-Rows also carry the Quinella-pool share path after_rollover -> t5 -> t3 -> t2 (`qin_pct_path`, `qin_rise_from_rollover_pct`, `qin_rise_from_t5_pct`,
-`qin_rise_steps`, `qin_rise_all_steps`) and, at t2, `qin_fall5_from_t5`: horses whose share fell 5%+ from t5 (0 of 17 shortened 10%+). Rising at every step is only
-a weak helper on top of qin fly (fly + every step up 35% of 31; no fly + every step up 5%). See docs/WINDROP.md.
-
-`qin_fly_and_rising` lists the horses that are qin fly now and rose at every step from the previous payout (35% of 31 shortened 10%+, fly alone 33%).
-
-## `momentum.md`: the t3/t2 predictions on one page
-
-`odds-data:predictions/YYYY-MM-DD_VENUE/momentum.md` (next to windrop's `summary.md`) is rewritten whenever a prediction or a race result changes
-(at most every 45 s): one table per race with the `t3` and `t2` ranks (★ = top 3), horse names, WIN price and the drop before the point,
-and after the race the drop from the point to the close, the three horses that really kept shortening, hits against chance, and a running total
-for the day. Open it on GitHub (phone or desktop). A bug in it only skips the page (`momentum summary skipped` in the log), never a record.
+This public repository only **collects and archives public market snapshots** (Quinella, WIN, Double, 66888 water). It contains no prediction models, thresholds, or analysis; those live in a private repository.
