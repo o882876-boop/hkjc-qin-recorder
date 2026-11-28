@@ -157,7 +157,7 @@ class StatusAndTiming(unittest.TestCase):
         _, pub = simulate(races, P1 - M(45), P1 + M(65))
         t, r2 = pub[2]
         self.assertGreaterEqual(t, post2)
-        self.assertEqual(r2["missing"], {})
+        self.assertEqual(set(r2["missing"]), {"t10"})          # the suspension covers post-10 min; every other point is taken
         r3 = pub[3][1]
         self.assertTrue(post2 <= obs(r3, "before_rollover") <= post2 + rec.WINDOW)
 
@@ -399,3 +399,23 @@ class MainLoop(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class T10Point(unittest.TestCase):
+    """t10 (10 min before the post time) is record-only: it must not change any pre-existing point or interval."""
+
+    def test_t10_captured_ten_minutes_before_post(self):
+        _, pub = simulate(card(2), P1 - M(45), P1 + M(35))
+        r1 = pub[1][1]
+        self.assertEqual(set(r1["missing"]), {"before_rollover", "after_rollover"})      # race 1 has no previous race
+        point = r1["points"]["t10"]
+        self.assertTrue(P1 - M(10) <= rec.stamp(point["observed_at"]) <= P1 - M(10) + rec.WINDOW)
+        self.assertTrue(r1["win_points"]["t10"])
+
+    def test_pre_existing_intervals_unchanged(self):
+        names = set(rec.CHANGE_INTERVALS)
+        for pair in (("after_rollover", "t5"), ("t5", "t3"), ("t3", "t2"), ("t2", "t1"), ("t1", "after_start"),
+                     ("t3", "after_start"), ("t2", "after_start"), ("t10", "t5"), ("t10", "after_start")):
+            self.assertIn(pair, names)
+        self.assertNotIn(("after_rollover", "t10"), names)
+        self.assertNotIn(("t1", "t10"), names)
